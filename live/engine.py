@@ -12,7 +12,7 @@ from osc import Client
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DEFDIR = os.path.join(HERE, "defs")
-LOG = "/tmp/foundry-scsynth.log"
+LOG = "/tmp/soundterm-scsynth.log"
 
 PORT = 57110
 FX_BUS = 16            # private stereo audio bus (16,17) — above hardware I/O

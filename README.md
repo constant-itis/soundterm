@@ -1,60 +1,90 @@
-# foundry
+# soundterm
 
-A prompt-driven modular audio foundry that lives in your terminal. You patch
-blocks of sound together by talking; an agent wires the cables, forges new
-instruments and effects, and mixes with its ears open — over a signal graph
-you can diff, branch, and version like code.
+**A prompt-driven modular synth that lives in your terminal.** A living sound is
+already playing when you open it; you reshape it by *talking*. An agent wires the
+patch — sets params, adds voices and effects — by emitting the same graph-ops your
+keyboard would, over OSC, to a headless [SuperCollider](https://supercollider.github.io/)
+engine. The patch is plain state you can diff, save, and version like code.
 
-> **Working name.** `foundry` collides with the Ethereum toolkit of the same
-> name — pick a distinct name before publishing.
+```
+> darker and more space
+  darkening and widening the space
+    drone.cutoff 700 → 400   reverb.mix 0.32 → 0.6
+> add a drum beat around 100 bpm
+  + added drum1 (drum)
+> play a little minor riff on a sequencer
+  + added seq1 (seq)
+    seq1.step0 48 → 59   seq1.step2 55 → 52   seq1.cutoff 2000 → 800
+```
 
-## Thesis
+## Why it's built this way
 
-- **State is truth.** The session is a serializable node graph. The agent
-  mutates the *graph*, never the audio; the engine reconciles to match it.
-- **Borrow the muscle.** SuperCollider's `scsynth` is a headless audio server
-  whose node graph is mutated live over OSC. We don't build DSP.
-- **The agent is a peer editor.** It emits the same graph-ops your keyboard
-  does, so every change is a visible diff.
-- **Git for mixes.** Diffable text sessions → branch, log, review the AI's work.
-- **Everything is a semantic token.** No hardcoded colors/glyphs in render code
-  — every visual references a themeable token ("CSS for the TUI").
+- **State is the source of truth.** The patch is a serializable node graph. The
+  agent mutates the *graph*, never the audio; the engine reconciles the running
+  sound to match. (Let the agent touch audio directly and you've built a demo.)
+- **Borrow the muscle.** `scsynth` is a headless audio server whose node graph is
+  mutated live over OSC — patching a running sound is its native mode. We don't
+  write DSP.
+- **The agent is a peer editor.** It emits the same ops the keyboard does, so every
+  change is visible and reversible.
+- **The engine owns time.** The sound never waits on the model; edits land live.
+- **Swappable brain.** A local model (fast, free) or Claude via your subscription —
+  no code change, switch it mid-session.
 
-Full design brief and phased roadmap: see mycelium `#1783` / `#1784`.
+## Chain
 
-## Phase 0 — the spike (this dir)
+```
+drone ─▶ [ source voices: drum · seq ] ─▶ [ effects: delay · tremolo · drive ] ─▶ reverb ─▶ out
+```
 
-Proves the one load-bearing assumption: *can a non-sclang process drive scsynth
-over OSC to make sound and mutate a running node's parameter live, glitch-free?*
+`drone` and `reverb` are fixed endpoints; everything between is added and removed by
+conversation. Source voices add signal onto the bus; effects process it in place.
 
-### Prereqs
+## Run it
 
 ```bash
 sudo apt install supercollider          # ships scsynth + sclang
 # PipeWire already provides the JACK layer scsynth needs (no jackd required)
+
+cd live
+./run.sh                                # local model (default)
+SOUNDTERM_MODEL=haiku ./run.sh          # or drive it with Claude (subscription auth)
 ```
 
-### Run
+Then talk to it. `/help` lists commands.
 
-```bash
-./spike/run_spike.sh
-```
+| command | does |
+|---|---|
+| `<anything>` | describe how the sound should change → the agent |
+| `/model <m>` | switch brain: `local` · `haiku` · `sonnet` · `opus` |
+| `/state` | show the patch + chain |
+| `/save [f]` | save the patch to JSON |
+| `/panic` | duck to silence · `/quit` to leave |
 
-You should hear a saw voice with a smooth filter sweep — no clicks. If so,
-Phase 0 passes and the whole architecture is green-lit.
+Notes are MIDI numbers in the sequencer (c3 = 48, c4 = 60); Claude translates note
+names reliably, the local model less so — use `/model haiku` for precise melodies.
 
-### What's here
+## Layout
 
-| file | role |
-|------|------|
-| `spike/build_defs.scd` | sclang **offline compiler** — writes `spikeVoice.scsyndef` |
-| `spike/osc.py`         | pure-stdlib OSC 1.0 client (no pip deps) |
-| `spike/drive.py`       | loads the def, starts a voice, sweeps cutoff live over OSC |
-| `spike/run_spike.sh`   | compile → boot scsynth (via `pw-jack`) → drive → tear down |
+| path | role |
+|---|---|
+| `live/soundterm.py` | the REPL |
+| `live/engine.py` | boots scsynth, wires the chain, reconciles params over OSC |
+| `live/graph.py` | the patch state — single source of truth (params, modules, ranges) |
+| `live/agent.py` | prompt → graph-ops; local-model or Claude-CLI backend |
+| `live/osc.py` | pure-stdlib OSC 1.0 client (no dependencies) |
+| `live/drone.scd` | the SynthDefs (drone, drum, seq, delay, tremolo, drive, reverb) |
+| `spike/` | the Phase-0 proof: a bare process making + live-mutating sound over OSC |
 
-The split — sclang compiles defs to disk, an external process drives scsynth —
-is not throwaway: it's the real architecture in miniature.
+No third-party Python packages — stdlib only.
+
+## Status
+
+Early. The drone + verbal control + drum + sequencer + effect chain all work. No TUI
+yet (the REPL is the interface for now); no arrangement/song layer yet. The roadmap
+is: a `ratatui` rack view, an agent that *builds* new SynthDefs, and an analysis loop
+that gives the agent ears.
 
 ## License
 
-TBD (FOSS — MIT or GPL-3; scsynth itself is GPL-3).
+TBD — MIT for this code is the intent. Note `scsynth` itself is GPL-3.

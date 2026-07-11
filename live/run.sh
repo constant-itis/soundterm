@@ -10,5 +10,5 @@ QT_QPA_PLATFORM=offscreen timeout 40 sclang drone.scd
 test -f defs/droneVoice.scsyndef || { echo "!! def compile failed"; exit 1; }
 test -f defs/fxReverb.scsyndef   || { echo "!! def compile failed"; exit 1; }
 
-echo "== launching foundry =="
-exec python3 foundry.py
+echo "== launching soundterm =="
+exec python3 soundterm.py

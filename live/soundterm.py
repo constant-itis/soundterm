@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""foundry — the verbal drone (Phase 1: agent loop, no TUI yet).
+"""soundterm — the verbal drone (Phase 1: agent loop, no TUI yet).
 
 Boots a living drone, then reshapes it from typed instructions and grows its
 effect chain by conversation:
@@ -31,7 +31,7 @@ def show_state(graph):
 
 
 def banner(agent):
-    print(f"{BOLD}{AMBER}foundry{RST} — the drone is live "
+    print(f"{BOLD}{AMBER}soundterm{RST} — the drone is live "
           f"{DIM}[model: {agent.backend}]{RST}. describe changes, /help for commands.\n")
 
 
@@ -48,7 +48,7 @@ HELP = f"""{BOLD}commands{RST}
 def main():
     graph = Graph()
     engine = Engine(graph)
-    agent = Agent(backend=os.environ.get("FOUNDRY_MODEL", "local"))
+    agent = Agent(backend=os.environ.get("SOUNDTERM_MODEL", "local"))
 
     print(f"{DIM}booting scsynth + drone...{RST}")
     engine.boot()
