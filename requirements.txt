@@ -1,0 +1,2 @@
+# Only the TUI needs a dependency; the REPL and engine are pure stdlib.
+textual>=8,<9

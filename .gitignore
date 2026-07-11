@@ -1,7 +1,11 @@
 # build artifacts
 spike/defs/*.scsyndef
+live/defs/*.scsyndef
 __pycache__/
 *.pyc
+
+# python venv (TUI dependency, not committed)
+.venv/
 
 # scratch
 /tmp/
