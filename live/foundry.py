@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """foundry — the verbal drone (Phase 1: agent loop, no TUI yet).
 
-Boots a living drone, then reshapes it from typed instructions:
+Boots a living drone, then reshapes it from typed instructions and grows its
+effect chain by conversation:
     > darker and more space
+    > add a slow tapey delay
     > wobblier, drop the pitch an octave
 Type /help for commands. Ctrl-C or /quit to leave.
 """
@@ -11,7 +13,7 @@ import sys
 
 from agent import Agent
 from engine import Engine
-from graph import Graph, resolve
+from graph import Graph
 
 # ---- tiny ANSI palette (semantic tokens — the "CSS for the TUI" starts here) ----
 DIM = "\033[2m"; BOLD = "\033[1m"; RST = "\033[0m"
@@ -20,28 +22,37 @@ GREY = "\033[38;5;245m"
 
 
 def show_state(graph):
-    for node, ps in graph.params.items():
+    for node in graph.node_keys():
+        ps = graph.node_params(node)
+        fx = graph._fx(node)
+        label = f"{node} {DIM}({fx['type']}){RST}" if fx else node
         vals = "  ".join(f"{GREY}{k}{RST} {v:g}" for k, v in ps.items())
-        print(f"  {TEAL}{node}{RST}  {vals}")
+        print(f"  {TEAL}{label}{RST}  {vals}")
+
+
+def banner(agent):
+    print(f"{BOLD}{AMBER}foundry{RST} — the drone is live "
+          f"{DIM}[model: {agent.backend}]{RST}. describe changes, /help for commands.\n")
 
 
 HELP = f"""{BOLD}commands{RST}
-  {AMBER}<anything>{RST}   describe how the sound should change (goes to the agent)
-  {AMBER}/state{RST}       show the current patch
-  {AMBER}/save [f]{RST}    save patch to f (default patch.json)
-  {AMBER}/panic{RST}       duck to silence
-  {AMBER}/help{RST}        this
-  {AMBER}/quit{RST}        leave"""
+  {AMBER}<anything>{RST}     describe how the sound should change (goes to the agent)
+  {AMBER}/state{RST}         show the current patch + effect chain
+  {AMBER}/model <m>{RST}     switch agent: local | opus | sonnet | haiku
+  {AMBER}/save [f]{RST}      save patch to f (default patch.json)
+  {AMBER}/panic{RST}         duck to silence
+  {AMBER}/help{RST}          this
+  {AMBER}/quit{RST}          leave"""
 
 
 def main():
     graph = Graph()
     engine = Engine(graph)
-    agent = Agent()
+    agent = Agent(backend=os.environ.get("FOUNDRY_MODEL", "local"))
 
     print(f"{DIM}booting scsynth + drone...{RST}")
     engine.boot()
-    print(f"{BOLD}{AMBER}foundry{RST} — the drone is live. describe changes, /help for commands.\n")
+    banner(agent)
     show_state(graph)
     print()
 
@@ -63,6 +74,11 @@ def main():
             elif line == "/panic":
                 engine.panic()
                 print(f"{RED}silenced{RST} (set a level to bring it back)")
+            elif line.startswith("/model"):
+                parts = line.split(maxsplit=1)
+                if len(parts) > 1:
+                    agent.backend = parts[1].strip()
+                print(f"{GREY}model: {agent.backend}{RST}")
             elif line.startswith("/save"):
                 parts = line.split(maxsplit=1)
                 path = parts[1] if len(parts) > 1 else "patch.json"
@@ -86,24 +102,34 @@ def handle_prompt(agent, engine, graph, text):
         print(f"{RED}agent error:{RST} {e}")
         return
 
-    applied = []
+    changes = []
     for op in ops:
+        kind = op.get("op", "set")
         try:
-            node, param = resolve(op.get("node"), op.get("param"))
-            old, new = graph.set(node, param, op.get("value"))
+            if kind == "add":
+                fx = graph.add_effect(op["type"])
+                engine.spawn_effect(fx)
+                changes.append(f"{TEAL}+ added{RST} {fx['key']} ({fx['type']})")
+            elif kind == "remove":
+                node, _ = graph.resolve(op.get("node"), op.get("node"))
+                fx = graph.remove_effect(node)
+                if fx:
+                    engine.free_effect(fx)
+                    changes.append(f"{RED}- removed{RST} {node}")
+            else:  # set
+                node, param = graph.resolve(op.get("node"), op.get("param"))
+                old, new = graph.set(node, param, op.get("value"))
+                if new != old:
+                    engine.push(node, param, new)
+                    changes.append(f"{node}.{param} {old:g}{AMBER}{new:g}{RST}")
         except (KeyError, TypeError, ValueError):
-            print(f"  {RED}skip{RST} {op.get('node')}.{op.get('param')} (unknown or bad value)")
-            continue
-        if new != old:
-            engine.push(node, param, new)
-            applied.append(f"{node}.{param} {old:g}{AMBER}{new:g}{RST}")
+            print(f"  {RED}skip{RST} {op} (unknown node/param/type)")
 
     if say:
         print(f"  {TEAL}{say}{RST}")
-    if applied:
-        for a in applied:
-            print(f"    {a}")
-    elif not ops:
+    for c in changes:
+        print(f"    {c}")
+    if not changes and not say:
         print(f"  {GREY}(no change){RST}")
 
 

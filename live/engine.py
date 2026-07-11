@@ -1,12 +1,13 @@
 """Engine: owns the scsynth process and reconciles the running sound to the Graph.
 
-Nothing here reasons about music — it just boots the server, wires the fixed
-drone->reverb chain through a private bus, and pushes param changes over OSC.
+Nothing here reasons about music — it boots the server, wires the drone->fx->reverb
+chain through a private bus, spawns/frees effects in order, and pushes param changes.
 """
 import os
 import subprocess
 import time
 
+from graph import EFFECT_DEF
 from osc import Client
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -17,7 +18,9 @@ PORT = 57110
 FX_BUS = 16            # private stereo audio bus (16,17) — above hardware I/O
 DRONE_ID = 1000
 REVERB_ID = 1001
+FX_ID_BASE = 1100      # effect node ids count up from here
 ADD_TO_HEAD = 0
+ADD_BEFORE = 2
 ADD_AFTER = 3
 
 
@@ -26,7 +29,9 @@ class Engine:
         self.graph = graph
         self.proc = None
         self.osc = None
+        self._next_fx_id = FX_ID_BASE
 
+    # ---- lifecycle ----------------------------------------------------------
     def boot(self):
         env = dict(os.environ, SC_JACK_DEFAULT_OUTPUTS="system:playback_1,system:playback_2")
         logf = open(LOG, "w")
@@ -37,7 +42,12 @@ class Engine:
         self._wait_ready()
         self.osc = Client("127.0.0.1", PORT)
         self._load_defs()
-        self._spawn_nodes()
+        # drone at head of root group; reverb right after it. Effects insert between.
+        self.osc.send("/s_new", "droneVoice", DRONE_ID, ADD_TO_HEAD, 0, "out", FX_BUS)
+        self.osc.send("/s_new", "fxReverb", REVERB_ID, ADD_AFTER, DRONE_ID, "in", FX_BUS, "out", 0)
+        early = self.osc.recv(0.3)
+        if early and early[0] == "/fail":
+            raise RuntimeError(f"node spawn failed: {early[1]}")
         self.reconcile_all()
 
     def _wait_ready(self, timeout=10.0):
@@ -55,44 +65,56 @@ class Engine:
         raise RuntimeError(f"scsynth not ready in {timeout}s — see {LOG}")
 
     def _load_defs(self):
-        # /d_loadDir on the folder is reliable (single-file /d_load is a no-op on
-        # scsynth 3.11); confirm via /status because /done alone can lie.
+        # /d_loadDir is reliable (single-file /d_load no-ops on scsynth 3.11);
+        # confirm via /status because /done alone can lie. 5 defs expected.
         self.osc.send("/d_loadDir", DEFDIR)
         self.osc.wait_for("/done", 4.0)
         deadline = time.monotonic() + 3.0
         while time.monotonic() < deadline:
             self.osc.send("/status")
-            if self.osc.wait_for("/status.reply", 2.0)[4] >= 2:
+            if self.osc.wait_for("/status.reply", 2.0)[4] >= 5:
                 return
             time.sleep(0.1)
         raise RuntimeError("synthdefs did not register")
 
-    def _spawn_nodes(self):
-        # drone -> FX_BUS (head of root group); reverb reads FX_BUS -> out 0, placed
-        # right AFTER the drone so it processes in the correct order.
-        self.osc.send("/s_new", "droneVoice", DRONE_ID, ADD_TO_HEAD, 0, "out", FX_BUS)
-        self.osc.send("/s_new", "fxReverb", REVERB_ID, ADD_AFTER, DRONE_ID,
-                      "in", FX_BUS, "out", 0)
-        early = self.osc.recv(0.3)
-        if early and early[0] == "/fail":
-            raise RuntimeError(f"node spawn failed: {early[1]}")
-
+    # ---- node ids -----------------------------------------------------------
     def _node_id(self, node):
-        return DRONE_ID if node == "drone" else REVERB_ID
+        if node == "drone":
+            return DRONE_ID
+        if node == "reverb":
+            return REVERB_ID
+        fx = self.graph._fx(node)
+        return fx["id"] if fx else None
 
+    # ---- param reconcile ----------------------------------------------------
     def push(self, node, param, value):
-        """Send one param to the live node (value already clamped by the Graph)."""
-        self.osc.send("/n_set", self._node_id(node), param, float(value))
+        nid = self._node_id(node)
+        if nid is not None:
+            self.osc.send("/n_set", nid, param, float(value))
 
     def reconcile_all(self):
-        for node, ps in self.graph.params.items():
-            for p, v in ps.items():
+        for node in self.graph.node_keys():
+            for p, v in self.graph.node_params(node).items():
                 self.push(node, p, v)
 
+    # ---- effect chain -------------------------------------------------------
+    def spawn_effect(self, fx):
+        """Insert a just-added effect into the live chain (right before reverb)."""
+        fx["id"] = self._next_fx_id
+        self._next_fx_id += 1
+        self.osc.send("/s_new", EFFECT_DEF[fx["type"]], fx["id"], ADD_BEFORE, REVERB_ID, "bus", FX_BUS)
+        early = self.osc.recv(0.2)
+        if early and early[0] == "/fail":
+            raise RuntimeError(f"effect spawn failed: {early[1]}")
+        for p, v in fx["params"].items():
+            self.osc.send("/n_set", fx["id"], p, float(v))
+
+    def free_effect(self, fx):
+        if fx and fx.get("id") is not None:
+            self.osc.send("/n_free", fx["id"])
+
     def panic(self):
-        """Duck everything to silence without tearing the graph down."""
-        for node in self.graph.params:
-            self.osc.send("/n_set", self._node_id(node), "amp", 0.0)
+        self.osc.send("/n_set", DRONE_ID, "amp", 0.0)
 
     def shutdown(self):
         try:
