@@ -14,31 +14,35 @@ import urllib.request
 LOCAL_ENDPOINT = "http://192.168.1.152:8100/v1/chat/completions"
 LOCAL_MODEL = "Qwen3.6-35B-A3B-UD-Q4_K_M.gguf"
 
-SYSTEM = """You are the control brain of a live modular drone synthesizer that is \
-already playing. The signal chain is: drone -> [effects] -> reverb. The user \
-describes how they want the sound to change; you respond with operations.
+SYSTEM = """You are the control brain of a live modular synthesizer that is already \
+playing. The signal chain is: drone -> [source voices] -> [effects] -> reverb. The \
+user describes how they want the sound to change; you respond with operations.
 
-Reply with ONLY a JSON object, no prose, no code fence:
-{"ops": [ <op>, ... ], "say": "<short lowercase confirmation>"}
+ALWAYS reply with ONLY a JSON object (no prose outside it, no code fence). Even when
+you are just talking or have nothing to change, reply with empty ops and put your
+message in "say":
+{"ops": [ <op>, ... ], "say": "<short lowercase message>"}
 
 Each op is one of:
   {"op": "set", "node": "<node>", "param": "<param>", "value": <number>}
-  {"op": "add", "type": "<effect type>"}
-  {"op": "remove", "node": "<effect node>"}
+  {"op": "add", "type": "<module type>"}
+  {"op": "remove", "node": "<module node>"}
 
 Rules:
 - For "set", use ABSOLUTE values within range. Read the CURRENT values below and
   compute the new absolute value for relative requests ("darker", "more space").
-- Add an effect only when the request needs a NEW kind of processing the chain
-  doesn't have yet ("add delay", "make it wobble" if no tremolo). Otherwise just
-  set params on what's there.
-- Change only what the request implies; keep moves musical. Multiple ops are fine.
+- To add RHYTHM add a "drum"; to play/sequence NOTES add a "seq". Add a module only
+  when the chain lacks that capability; otherwise just set params on what's there.
+- A "seq" has step0..step7, each a MIDI note (0 = rest). To play a melody, set the
+  steps: middle C is 60, c3=48, so "c3 e3 g3" -> step0=48, step1=52, step2=55, rest 0.
+- If the user asks for something impossible, do it the closest supported way and say
+  so briefly. Keep moves musical. Multiple ops per reply are fine.
 - Use exact node/param names. Never invent params.
 
 CURRENT PATCH (node.param = value [min..max] meaning):
 {catalog}
 
-EFFECTS YOU CAN ADD (type (params)): {effects}"""
+MODULES YOU CAN ADD (type [role] (params)): {modules}"""
 
 
 class Agent:
@@ -49,7 +53,7 @@ class Agent:
         """Return (ops:list[dict], say:str). Raises on transport/parse failure."""
         sys_prompt = (SYSTEM
                       .replace("{catalog}", graph.catalog())
-                      .replace("{effects}", graph.effect_menu()))
+                      .replace("{modules}", graph.module_menu()))
         if self.backend == "local":
             content = self._local(sys_prompt, text)
         else:
@@ -83,8 +87,13 @@ class Agent:
 
     @staticmethod
     def _parse(content):
+        # if the model chatted instead of emitting JSON, don't crash — surface its
+        # words as the reply with no ops (a no-op turn).
         m = re.search(r"\{.*\}", content, re.DOTALL)
         if not m:
-            raise ValueError(f"no JSON in model reply: {content!r}")
-        data = json.loads(m.group(0))
+            return [], content.strip()[:300]
+        try:
+            data = json.loads(m.group(0))
+        except json.JSONDecodeError:
+            return [], content.strip()[:300]
         return (data.get("ops", []) or []), (data.get("say", "") or "")

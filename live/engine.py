@@ -7,7 +7,7 @@ import os
 import subprocess
 import time
 
-from graph import EFFECT_DEF
+from graph import MODULE_REGISTRY
 from osc import Client
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -72,7 +72,7 @@ class Engine:
         deadline = time.monotonic() + 3.0
         while time.monotonic() < deadline:
             self.osc.send("/status")
-            if self.osc.wait_for("/status.reply", 2.0)[4] >= 5:
+            if self.osc.wait_for("/status.reply", 2.0)[4] >= 7:
                 return
             time.sleep(0.1)
         raise RuntimeError("synthdefs did not register")
@@ -83,8 +83,8 @@ class Engine:
             return DRONE_ID
         if node == "reverb":
             return REVERB_ID
-        fx = self.graph._fx(node)
-        return fx["id"] if fx else None
+        m = self.graph._mod(node)
+        return m["id"] if m else None
 
     # ---- param reconcile ----------------------------------------------------
     def push(self, node, param, value):
@@ -97,21 +97,27 @@ class Engine:
             for p, v in self.graph.node_params(node).items():
                 self.push(node, p, v)
 
-    # ---- effect chain -------------------------------------------------------
-    def spawn_effect(self, fx):
-        """Insert a just-added effect into the live chain (right before reverb)."""
-        fx["id"] = self._next_fx_id
+    # ---- modules (voices + effects) ----------------------------------------
+    def spawn_module(self, mod):
+        """Insert a just-added module into the live chain. Source voices ADD onto the
+        bus and go right after the drone; effects process the bus right before reverb.
+        Both placements keep the order drone -> sources -> effects -> reverb."""
+        reg = MODULE_REGISTRY[mod["type"]]
+        mod["id"] = self._next_fx_id
         self._next_fx_id += 1
-        self.osc.send("/s_new", EFFECT_DEF[fx["type"]], fx["id"], ADD_BEFORE, REVERB_ID, "bus", FX_BUS)
+        if reg["role"] == "source":
+            self.osc.send("/s_new", reg["def"], mod["id"], ADD_AFTER, DRONE_ID, "out", FX_BUS)
+        else:
+            self.osc.send("/s_new", reg["def"], mod["id"], ADD_BEFORE, REVERB_ID, "bus", FX_BUS)
         early = self.osc.recv(0.2)
         if early and early[0] == "/fail":
-            raise RuntimeError(f"effect spawn failed: {early[1]}")
-        for p, v in fx["params"].items():
-            self.osc.send("/n_set", fx["id"], p, float(v))
+            raise RuntimeError(f"module spawn failed: {early[1]}")
+        for p, v in mod["params"].items():
+            self.osc.send("/n_set", mod["id"], p, float(v))
 
-    def free_effect(self, fx):
-        if fx and fx.get("id") is not None:
-            self.osc.send("/n_free", fx["id"])
+    def free_module(self, mod):
+        if mod and mod.get("id") is not None:
+            self.osc.send("/n_free", mod["id"])
 
     def panic(self):
         self.osc.send("/n_set", DRONE_ID, "amp", 0.0)

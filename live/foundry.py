@@ -24,8 +24,8 @@ GREY = "\033[38;5;245m"
 def show_state(graph):
     for node in graph.node_keys():
         ps = graph.node_params(node)
-        fx = graph._fx(node)
-        label = f"{node} {DIM}({fx['type']}){RST}" if fx else node
+        m = graph._mod(node)
+        label = f"{node} {DIM}({m['type']}){RST}" if m else node
         vals = "  ".join(f"{GREY}{k}{RST} {v:g}" for k, v in ps.items())
         print(f"  {TEAL}{label}{RST}  {vals}")
 
@@ -107,14 +107,14 @@ def handle_prompt(agent, engine, graph, text):
         kind = op.get("op", "set")
         try:
             if kind == "add":
-                fx = graph.add_effect(op["type"])
-                engine.spawn_effect(fx)
-                changes.append(f"{TEAL}+ added{RST} {fx['key']} ({fx['type']})")
+                mod = graph.add_module(op["type"])
+                engine.spawn_module(mod)
+                changes.append(f"{TEAL}+ added{RST} {mod['key']} ({mod['type']})")
             elif kind == "remove":
                 node, _ = graph.resolve(op.get("node"), op.get("node"))
-                fx = graph.remove_effect(node)
-                if fx:
-                    engine.free_effect(fx)
+                mod = graph.remove_module(node)
+                if mod:
+                    engine.free_module(mod)
                     changes.append(f"{RED}- removed{RST} {node}")
             else:  # set
                 node, param = graph.resolve(op.get("node"), op.get("param"))
