@@ -19,9 +19,11 @@ FX_BUS = 16            # private stereo audio bus (16,17) — above hardware I/O
 DRONE_ID = 1000
 REVERB_ID = 1001
 METER_ID = 1002        # master meter node
+EXPORT_ID = 1003       # disk recorder node
 FX_ID_BASE = 1100      # effect node ids count up from here
 METER_L = 4000         # control buses the meter publishes L/R amplitude to
 METER_R = 4001
+EXPORT_BUF = 512       # soundfile buffer the recorder streams into
 ADD_TO_HEAD = 0
 ADD_TO_TAIL = 1
 ADD_BEFORE = 2
@@ -34,6 +36,7 @@ class Engine:
         self.proc = None
         self.osc = None
         self.meter_osc = None         # separate socket for meter polling (no contention)
+        self._export_path = None      # set while recording to disk
         self._next_fx_id = FX_ID_BASE
         self._next_buf = 0            # sample buffers count up from 0
         self._next_ctrl_bus = 0       # control buses for CV cables count up from 0
@@ -41,7 +44,11 @@ class Engine:
 
     # ---- lifecycle ----------------------------------------------------------
     def boot(self):
-        env = dict(os.environ, SC_JACK_DEFAULT_OUTPUTS="system:playback_1,system:playback_2")
+        # auto-wire hardware out AND in — so a mic / interface / analog synth patched
+        # into the audio inputs is available to the lineIn ("input") module.
+        env = dict(os.environ,
+                   SC_JACK_DEFAULT_OUTPUTS="system:playback_1,system:playback_2",
+                   SC_JACK_DEFAULT_INPUTS="system:capture_1,system:capture_2")
         logf = open(LOG, "w")
         self.proc = subprocess.Popen(
             ["pw-jack", "scsynth", "-u", str(PORT)],
@@ -79,13 +86,13 @@ class Engine:
 
     def _load_defs(self):
         # /d_loadDir is reliable (single-file /d_load no-ops on scsynth 3.11);
-        # confirm via /status because /done alone can lie. 16 defs expected.
+        # confirm via /status because /done alone can lie. 18 defs expected.
         self.osc.send("/d_loadDir", DEFDIR)
         self.osc.wait_for("/done", 4.0)
         deadline = time.monotonic() + 3.0
         while time.monotonic() < deadline:
             self.osc.send("/status")
-            if self.osc.wait_for("/status.reply", 2.0)[4] >= 16:
+            if self.osc.wait_for("/status.reply", 2.0)[4] >= 18:
                 return
             time.sleep(0.1)
         raise RuntimeError("synthdefs did not register")
@@ -243,11 +250,44 @@ class Engine:
             raise RuntimeError(f"capture failed: {early[1]}")
         return buf, seconds
 
+    # ---- export (record the master to a WAV) --------------------------------
+    def is_exporting(self):
+        return self._export_path is not None
+
+    def start_export(self, path):
+        """Open `path` for writing and stream the live master (bus 0) into it via a
+        DiskOut node at the tail. Returns the path, or None if already recording."""
+        if self._export_path is not None:
+            return None
+        self.osc.send("/b_alloc", EXPORT_BUF, 65536, 2)
+        self.osc.wait_for("/done", 4.0)
+        self.osc.send("/b_write", EXPORT_BUF, path, "wav", "int24", 0, 0, 1)  # leaveOpen
+        self.osc.wait_for("/done", 4.0)
+        self.osc.send("/s_new", "diskRec", EXPORT_ID, ADD_TO_TAIL, 0, "buf", EXPORT_BUF, "in", 0)
+        early = self.osc.recv(0.2)
+        if early and early[0] == "/fail":
+            raise RuntimeError(f"export failed: {early[1]}")
+        self._export_path = path
+        return path
+
+    def stop_export(self):
+        """Stop recording, close the file (flush the WAV header) and free the buffer."""
+        if self._export_path is None:
+            return None
+        path = self._export_path
+        self._export_path = None
+        self.osc.send("/n_free", EXPORT_ID)
+        self.osc.send("/b_close", EXPORT_BUF)     # finalizes the soundfile
+        self.osc.send("/b_free", EXPORT_BUF)
+        return path
+
     def panic(self):
         self.osc.send("/n_set", DRONE_ID, "amp", 0.0)
 
     def shutdown(self):
         try:
+            if self._export_path is not None:
+                self.stop_export()        # flush the file before we tear down
             if self.meter_osc:
                 self.meter_osc.close()
             if self.osc:

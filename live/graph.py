@@ -77,6 +77,10 @@ MODULE_REGISTRY = {
         **_STEPS16},
         "defaults": {"bpm": 120.0, "tone": 1500.0, "decay": 0.2, "level": 0.6,
                      **_pat16([4, 12])}},
+    "input": {"role": "source", "def": "lineIn", "specs": {
+        "gain": (0.0, 8.0, "input gain (drive the incoming signal)"),
+        "amp":  (0.0, 1.0, "input level in the mix")},
+        "defaults": {"gain": 1.0, "amp": 0.8}},
     "seq": {"role": "source", "def": "seqVoice", "specs": {
         "bpm":    (40.0, 220.0, "tempo in BPM (plays 8th notes)"),
         "cutoff": (60.0, 12000.0, "sequencer filter brightness"),
@@ -122,7 +126,7 @@ MODULE_REGISTRY = {
 # `enabled` flag whose ONLY effect is that the engine sends 0 for this param — the
 # stored value is untouched, so "start" restores the sound exactly.
 BYPASS_PARAM_FIXED = {"drone": "amp", "reverb": "mix"}
-BYPASS_PARAM_TYPE = {"drum": "level", "seq": "amp",
+BYPASS_PARAM_TYPE = {"drum": "level", "seq": "amp", "input": "amp",
                      "kick": "level", "snare": "level", "hat": "level", "clap": "level",
                      "delay": "mix", "tremolo": "depth", "drive": "mix",
                      "sampler": "amp"}

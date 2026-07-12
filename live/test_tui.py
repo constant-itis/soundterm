@@ -225,6 +225,24 @@ async def main():
         _os.remove(tmp)
         print("OK — save/load good")
 
+        # export: record a moment of the master to a WAV, then stop; the file exists
+        wav = _os.path.join(tempfile.gettempdir(), "soundterm_test.wav")
+        if _os.path.exists(wav):
+            _os.remove(wav)
+        app.engine.start_export(wav)
+        assert app.engine.is_exporting(), "export did not start"
+        await asyncio.sleep(0.6)                        # let some audio stream to disk
+        app.engine.stop_export()
+        await asyncio.sleep(0.2)                        # let /b_close finalize the file
+        assert not app.engine.is_exporting(), "export did not stop"
+        assert _os.path.exists(wav) and _os.path.getsize(wav) > 44, "wav not written"
+        _os.remove(wav)
+        # input module: an audio-in source can be added like any other voice
+        app._apply_ops([{"op": "add", "type": "input"}], "add input")
+        await pilot.pause(); await asyncio.sleep(0.2)
+        assert any(m["type"] == "input" for m in app.graph.modules), "input module not added"
+        print("OK — export + input good")
+
 
 if __name__ == "__main__":
     asyncio.run(main())

@@ -24,6 +24,7 @@ from graph import Graph, MODULE_REGISTRY
 AMBER = "#f2b84b"; TEAL = "#45d6c9"; GREY = "#8a95a6"; TRACK = "#2c3646"
 LABEL_W = 16
 PATCH_DIR = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "patches"))
+EXPORT_DIR = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "exports"))
 
 
 class ParamRow(Widget):
@@ -309,9 +310,10 @@ class Soundterm(App):
             col = "#ff6f5e" if v > 0.9 else (AMBER if v > 0.6 else TEAL)
             return f"[{col}]{'▮' * n}[/][{TRACK}]{'▯' * (w - n)}[/]"
 
+        rec = "[#ff6f5e]● REC[/] " if self.engine.is_exporting() else ""
         try:
             self.query_one("#meter", Static).update(
-                Text.from_markup(f"[{GREY}]out[/] L {bar(l)}  R {bar(r)}"))
+                Text.from_markup(f"{rec}[{GREY}]out[/] L {bar(l)}  R {bar(r)}"))
         except Exception:
             pass
 
@@ -387,8 +389,21 @@ class Soundterm(App):
         if text.startswith("/patches"):
             self._set_status("patches: " + (", ".join(self._list_patches()) or "(none)"))
             return
+        if text.startswith("/export"):
+            parts = text.split(maxsplit=1)
+            self._toggle_export(parts[1].strip() if len(parts) > 1 else "take")
+            return
         self._set_status(f"… {text}")
         self._run_agent(text)
+
+    def _toggle_export(self, name):
+        if self.engine.is_exporting():
+            path = self.engine.stop_export()
+            self._set_status(f"■ saved recording → {os.path.basename(path)}")
+        else:
+            os.makedirs(EXPORT_DIR, exist_ok=True)
+            self.engine.start_export(os.path.join(EXPORT_DIR, name + ".wav"))
+            self._set_status(f"● REC → {name}.wav  ·  /export again to stop")
 
     # ---- save / load whole patches ------------------------------------------
     def _patch_path(self, name):

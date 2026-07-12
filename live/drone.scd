@@ -146,6 +146,21 @@ SynthDef(\clapVoice, { |out = 16, bpm = 120, tone = 1500, decay = 0.2, level = 0
     Out.ar(out, (sig * level).dup);
 }).writeDefFile(dir);
 
+// --- external input: bring a mic / audio interface / analog synth into the rack --
+// A source voice reading the hardware inputs, so outboard gear flows through the
+// same effects, reverb, meters and sampler as everything else.
+SynthDef(\lineIn, { |out = 16, gain = 1.0, amp = 1.0|
+    var sig;
+    sig = SoundIn.ar([0, 1]) * gain;
+    Out.ar(out, sig * amp);
+}).writeDefFile(dir);
+
+// --- export: stream the live master (bus `in` = 0) to a soundfile on disk --------
+// The buffer is opened for writing by /b_write (leaveOpen); DiskOut streams into it.
+SynthDef(\diskRec, { |buf = 0, in = 0|
+    DiskOut.ar(buf, In.ar(in, 2));
+}).writeDefFile(dir);
+
 // --- sampling: rip a chunk of the live output, play it back as a looping voice --
 // `capture` records the stereo master (bus `in` = 0) into `buf`, then frees itself
 // when the buffer is full. `sampler` is a source voice that loops a captured buffer
@@ -204,6 +219,6 @@ SynthDef(\masterMeter, { |in = 0, outL = 4000, outR = 4001|
     Out.kr(outR, amp[1]);
 }).writeDefFile(dir);
 
-"[build] wrote drone + drum + kick + snare + hat + clap + seq + delay + tremolo + drive + capture + sampler + cvLfo + cvArp + reverb + masterMeter".postln;
+"[build] wrote drone + drum + kick + snare + hat + clap + seq + lineIn + delay + tremolo + drive + capture + sampler + diskRec + cvLfo + cvArp + reverb + masterMeter".postln;
 0.exit;
 )

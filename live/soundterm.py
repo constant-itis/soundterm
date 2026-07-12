@@ -16,6 +16,7 @@ from engine import Engine
 from graph import Graph
 
 PATCH_DIR = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "patches"))
+EXPORT_DIR = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "exports"))
 
 # ---- tiny ANSI palette (semantic tokens — the "CSS for the TUI" starts here) ----
 DIM = "\033[2m"; BOLD = "\033[1m"; RST = "\033[0m"
@@ -43,6 +44,7 @@ HELP = f"""{BOLD}commands{RST}
   {AMBER}/model <m>{RST}     switch agent: local | opus | sonnet | haiku
   {AMBER}/save [name]{RST}   save the whole patch (default 'patch')
   {AMBER}/load <name>{RST}   load a saved patch · {AMBER}/patches{RST} to list
+  {AMBER}/export [name]{RST} record the master to a WAV (again to stop)
   {AMBER}/panic{RST}         duck to silence
   {AMBER}/help{RST}          this
   {AMBER}/quit{RST}          leave"""
@@ -101,6 +103,16 @@ def main():
                 print(f"{GREY}saved -> {name}{RST}")
             elif line.startswith("/patches"):
                 print(f"{GREY}patches: {', '.join(_list_patches()) or '(none)'}{RST}")
+            elif line.startswith("/export"):
+                if engine.is_exporting():
+                    path = engine.stop_export()
+                    print(f"{GREY}■ saved recording -> {os.path.basename(path)}{RST}")
+                else:
+                    parts = line.split(maxsplit=1)
+                    name = parts[1].strip() if len(parts) > 1 else "take"
+                    os.makedirs(EXPORT_DIR, exist_ok=True)
+                    engine.start_export(os.path.join(EXPORT_DIR, name + ".wav"))
+                    print(f"{RED}● REC{RST} -> {name}.wav (/export again to stop)")
             elif line.startswith("/load"):
                 parts = line.split(maxsplit=1)
                 if len(parts) > 1 and os.path.exists(_patch_path(parts[1].strip())):
