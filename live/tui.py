@@ -5,6 +5,8 @@ Non-destructive: reuses the SAME engine/graph/agent as the REPL. Each module is 
 box in a horizontal rack; each param is a bar you drag with the mouse. The prompt
 bar talks to the agent; the +buttons add modules by hand. Both edit one live patch.
 """
+import time
+
 from rich.text import Text
 from textual import work
 from textual.app import App, ComposeResult
@@ -102,15 +104,25 @@ class StepRow(Widget):
         self.keys = step_keys                       # ordered step0..stepN
         self.vals = [float(v) for v in values]
         self.on_change = on_change
+        self._play = -1                             # live playhead cell (-1 = none)
 
     def render(self):
         cells = []
         for i, v in enumerate(self.vals):
-            mark, color = ("▓▓", AMBER) if v > 0 else ("··", TRACK)
+            on = v > 0
+            if i == self._play:                     # the beat is here right now
+                mark, color = ("██", "#ffffff") if on else ("▕▏", GREY)
+            else:
+                mark, color = ("▓▓", AMBER) if on else ("··", TRACK)
             cells.append(f"[{color}]{mark}[/]")
             if i % 4 == 3 and i < len(self.vals) - 1:
                 cells.append(" ")
         return Text.from_markup(f"[{GREY}]steps[/] " + "".join(cells))
+
+    def set_playhead(self, i):
+        if i != self._play:
+            self._play = i
+            self.refresh()
 
     def _cell_at(self, x):
         pos = 6                                     # width of "steps "
@@ -227,6 +239,7 @@ class Soundterm(App):
     ParamRow:focus {{ background: #1c2430; }}
     StepRow {{ height: 1; }}
     StepRow:focus {{ background: #1c2430; }}
+    #meter {{ height: 1; padding: 0 1; background: #0e1219; }}
     #status {{ height: 1; color: {TEAL}; padding: 0 1; background: #171d27; }}
     #addbar {{ height: 3; padding: 1 1 0 1; }}
     .addbtn {{ margin: 0 2 0 0; min-width: 9; border: none; height: 1; background: #1c2430; color: {AMBER}; }}
@@ -240,10 +253,13 @@ class Soundterm(App):
         self.engine = Engine(self.graph)
         self.agent = Agent(backend=model)
         self.last_status = ""
+        self._stop_meter = False
+        self._t0 = 0.0                 # playhead time origin (set when audio starts)
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=False)
         yield HorizontalScroll(id="rack")
+        yield Static("", id="meter")
         yield Static("booting scsynth + drone…", id="status")
         with HorizontalScroll(id="addbar"):
             for t, reg in MODULE_REGISTRY.items():
@@ -272,6 +288,40 @@ class Soundterm(App):
         for node in self.graph.node_keys():
             rack.mount(ModulePanel(node, self.graph, self._on_param))
         self._set_status(f"live · model {self.agent.backend} · drag a bar · space=start/stop · click + · type a change")
+        self._t0 = time.monotonic()
+        self._meter_loop()                          # background: poll master level
+        self.set_interval(1 / 20, self._tick_playheads)  # foreground: step cursors
+
+    @work(thread=True)
+    def _meter_loop(self):
+        while not self._stop_meter:
+            l, r = self.engine.read_levels()
+            self.call_from_thread(self._update_meter, l, r)
+            time.sleep(1 / 15)
+
+    def _update_meter(self, l, r):
+        w = 22
+
+        def bar(v):
+            n = min(w, int(v * w * 1.6))            # a little headroom scaling
+            col = "#ff6f5e" if v > 0.9 else (AMBER if v > 0.6 else TEAL)
+            return f"[{col}]{'▮' * n}[/][{TRACK}]{'▯' * (w - n)}[/]"
+
+        try:
+            self.query_one("#meter", Static).update(
+                Text.from_markup(f"[{GREY}]out[/] L {bar(l)}  R {bar(r)}"))
+        except Exception:
+            pass
+
+    def _tick_playheads(self):
+        now = time.monotonic()
+        for sr in self.query(StepRow):
+            if not self.graph.is_enabled(sr.node):
+                sr.set_playhead(-1)
+                continue
+            bpm = float(self.graph.node_params(sr.node).get("bpm", 120.0))
+            n = len(sr.vals) or 1
+            sr.set_playhead(int((now - self._t0) * (bpm / 60.0 * 4.0)) % n)
 
     # ---- edits --------------------------------------------------------------
     def _on_param(self, node, param, value):
@@ -475,6 +525,7 @@ class Soundterm(App):
         self.query_one("#status", Static).update(msg)
 
     def on_unmount(self):
+        self._stop_meter = True
         try:
             self.engine.shutdown()
         except Exception:

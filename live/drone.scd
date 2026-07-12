@@ -193,6 +193,17 @@ SynthDef(\fxReverb, { |in = 16, out = 0, mix = 0.3, room = 0.7, damp = 0.5, amp 
     Out.ar(out, wet * amp);
 }).writeDefFile(dir);
 
-"[build] wrote drone + drum + kick + snare + hat + clap + seq + delay + tremolo + drive + capture + sampler + cvLfo + cvArp + reverb".postln;
+// --- metering: read the master and publish L/R amplitude to control buses -------
+// Sits at the tail so it reads bus 0 AFTER the reverb has written it. The TUI polls
+// the two control buses (/c_getn) ~15x/s to draw a live VU — no audio, just levels.
+SynthDef(\masterMeter, { |in = 0, outL = 4000, outR = 4001|
+    var sig, amp;
+    sig = In.ar(in, 2);
+    amp = Amplitude.kr(sig, 0.01, 0.2);
+    Out.kr(outL, amp[0]);
+    Out.kr(outR, amp[1]);
+}).writeDefFile(dir);
+
+"[build] wrote drone + drum + kick + snare + hat + clap + seq + delay + tremolo + drive + capture + sampler + cvLfo + cvArp + reverb + masterMeter".postln;
 0.exit;
 )

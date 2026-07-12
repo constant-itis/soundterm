@@ -179,6 +179,25 @@ async def main():
         assert not any(m["key"] == km for m in app.graph.modules), "menu remove failed"
         print("OK — mouse patching menus good")
 
+        # live meters + step playhead: the master meter reads L/R levels, and an
+        # enabled drum lane advances a playhead cursor at its tempo (parked when stopped)
+        l, r = app.engine.read_levels()
+        assert isinstance(l, float) and isinstance(r, float), "meter did not read levels"
+        app._update_meter(0.5, 0.85)                    # renders without error
+        app._apply_ops([{"op": "add", "type": "kick"}], "kick for playhead")
+        await pilot.pause(); await asyncio.sleep(0.2)
+        kp = [m for m in app.graph.modules if m["type"] == "kick"][0]["key"]
+        sr = app.query_one(f"#steprow-{kp}", StepRow)
+        app._t0 = 0.0
+        app._tick_playheads()
+        await pilot.pause()
+        assert 0 <= sr._play < len(sr.vals), "playhead did not advance on enabled lane"
+        app._apply_ops([{"op": "toggle", "node": kp, "value": False}], "stop")
+        await pilot.pause()
+        app._tick_playheads()
+        assert sr._play == -1, "stopped lane should park the playhead"
+        print("OK — meters + playhead good")
+
 
 if __name__ == "__main__":
     asyncio.run(main())

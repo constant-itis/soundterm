@@ -85,16 +85,17 @@ names reliably, the local model less so — use `/model haiku` for precise melod
 | `live/drone.scd` | the SynthDefs (drone, drum voices, seq, sampler, delay/tremolo/drive, lfo/arp, reverb) |
 | `spike/` | the Phase-0 proof: a bare process making + live-mutating sound over OSC |
 
-No third-party Python packages — stdlib only.
+The REPL and engine are pure stdlib; only the TUI needs Textual (isolated in a venv).
 
 ## Status
 
 Working. Drone + verbal control, granular drum voices (kick/snare/hat/clap with 16-step
 lanes), a note sequencer, the effect chain, live sampling (rip the master into a looping
-voice), per-module start/stop, and CV modulation (lfo/arp patch cables) all run — from
-the REPL or the Textual TUI rack (`live/tui.py`). Cables are wired by conversation or by
-right-click menu; free-drag cables, live meters, and an arrangement/song layer are next,
-along with an agent that *builds* new SynthDefs and an analysis loop that gives it ears.
+voice), per-module start/stop, CV modulation (lfo/arp patch cables), and a live master
+meter + step-lane playheads all run — from the REPL or the Textual TUI rack
+(`live/tui.py`). Cables are wired by conversation or by right-click menu; free-drag
+cables, per-module meters, and an arrangement/song layer are next, along with an agent
+that *builds* new SynthDefs and an analysis loop that gives it ears.
 
 ## License
 

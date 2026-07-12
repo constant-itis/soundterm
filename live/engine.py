@@ -18,7 +18,10 @@ PORT = 57110
 FX_BUS = 16            # private stereo audio bus (16,17) — above hardware I/O
 DRONE_ID = 1000
 REVERB_ID = 1001
+METER_ID = 1002        # master meter node
 FX_ID_BASE = 1100      # effect node ids count up from here
+METER_L = 4000         # control buses the meter publishes L/R amplitude to
+METER_R = 4001
 ADD_TO_HEAD = 0
 ADD_TO_TAIL = 1
 ADD_BEFORE = 2
@@ -30,6 +33,7 @@ class Engine:
         self.graph = graph
         self.proc = None
         self.osc = None
+        self.meter_osc = None         # separate socket for meter polling (no contention)
         self._next_fx_id = FX_ID_BASE
         self._next_buf = 0            # sample buffers count up from 0
         self._next_ctrl_bus = 0       # control buses for CV cables count up from 0
@@ -45,11 +49,15 @@ class Engine:
         )
         self._wait_ready()
         self.osc = Client("127.0.0.1", PORT)
+        self.meter_osc = Client("127.0.0.1", PORT)
         self._load_defs()
         self.sr = self._read_sr()
         # drone at head of root group; reverb right after it. Effects insert between.
         self.osc.send("/s_new", "droneVoice", DRONE_ID, ADD_TO_HEAD, 0, "out", FX_BUS)
         self.osc.send("/s_new", "fxReverb", REVERB_ID, ADD_AFTER, DRONE_ID, "in", FX_BUS, "out", 0)
+        # meter at the tail — reads bus 0 after the reverb writes it.
+        self.osc.send("/s_new", "masterMeter", METER_ID, ADD_TO_TAIL, 0,
+                      "in", 0, "outL", METER_L, "outR", METER_R)
         early = self.osc.recv(0.3)
         if early and early[0] == "/fail":
             raise RuntimeError(f"node spawn failed: {early[1]}")
@@ -71,13 +79,13 @@ class Engine:
 
     def _load_defs(self):
         # /d_loadDir is reliable (single-file /d_load no-ops on scsynth 3.11);
-        # confirm via /status because /done alone can lie. 15 defs expected.
+        # confirm via /status because /done alone can lie. 16 defs expected.
         self.osc.send("/d_loadDir", DEFDIR)
         self.osc.wait_for("/done", 4.0)
         deadline = time.monotonic() + 3.0
         while time.monotonic() < deadline:
             self.osc.send("/status")
-            if self.osc.wait_for("/status.reply", 2.0)[4] >= 15:
+            if self.osc.wait_for("/status.reply", 2.0)[4] >= 16:
                 return
             time.sleep(0.1)
         raise RuntimeError("synthdefs did not register")
@@ -89,6 +97,18 @@ class Engine:
             return float(self.osc.wait_for("/status.reply", 2.0)[7]) or 48000.0
         except (TimeoutError, IndexError, ValueError):
             return 48000.0
+
+    def read_levels(self):
+        """Poll the meter's L/R control buses. Returns (l, r) amplitudes in ~0..1.
+        Uses a dedicated socket so it never races the main client's replies."""
+        if not self.meter_osc:
+            return 0.0, 0.0
+        try:
+            self.meter_osc.send("/c_getn", METER_L, 2)
+            r = self.meter_osc.wait_for("/c_setn", 0.1)   # [bus, count, vL, vR]
+            return max(0.0, float(r[2])), max(0.0, float(r[3]))
+        except (TimeoutError, IndexError, ValueError, OSError):
+            return 0.0, 0.0
 
     # ---- node ids -----------------------------------------------------------
     def _node_id(self, node):
@@ -208,6 +228,8 @@ class Engine:
 
     def shutdown(self):
         try:
+            if self.meter_osc:
+                self.meter_osc.close()
             if self.osc:
                 self.osc.send("/g_freeAll", 0)
                 self.osc.send("/quit")
