@@ -34,11 +34,18 @@ engine. The patch is plain state you can diff, save, and version like code.
 ## Chain
 
 ```
-drone ─▶ [ source voices: drum · seq ] ─▶ [ effects: delay · tremolo · drive ] ─▶ reverb ─▶ out
+drone ─▶ [ source voices: drum · kick · snare · hat · clap · seq · sampler ] ─▶ [ effects: delay · tremolo · drive ] ─▶ reverb ─▶ out
+             ▲ cv modulation (lfo · arp) ──▶ maps onto any param
 ```
 
 `drone` and `reverb` are fixed endpoints; everything between is added and removed by
 conversation. Source voices add signal onto the bus; effects process it in place.
+
+**Patch cables.** Beyond the audio chain, `lfo` and `arp` are *control* sources: they
+make no sound, but you *connect* their output onto any param and it moves on its own —
+an LFO sweeping `drone.cutoff`, an arpeggiator driving `drone.freq`. Connections are
+edges you add and pull (`connect`/`disconnect`); a modulated param is driven live and
+shows as such until you unpatch it. This is what makes the patch a graph, not a chain.
 
 ## Run it
 
@@ -73,17 +80,20 @@ names reliably, the local model less so — use `/model haiku` for precise melod
 | `live/graph.py` | the patch state — single source of truth (params, modules, ranges) |
 | `live/agent.py` | prompt → graph-ops; local-model or Claude-CLI backend |
 | `live/osc.py` | pure-stdlib OSC 1.0 client (no dependencies) |
-| `live/drone.scd` | the SynthDefs (drone, drum, seq, delay, tremolo, drive, reverb) |
+| `live/tui.py` | the visual rack — a Textual TUI over the same live patch |
+| `live/drone.scd` | the SynthDefs (drone, drum voices, seq, sampler, delay/tremolo/drive, lfo/arp, reverb) |
 | `spike/` | the Phase-0 proof: a bare process making + live-mutating sound over OSC |
 
 No third-party Python packages — stdlib only.
 
 ## Status
 
-Early. The drone + verbal control + drum + sequencer + effect chain all work. No TUI
-yet (the REPL is the interface for now); no arrangement/song layer yet. The roadmap
-is: a `ratatui` rack view, an agent that *builds* new SynthDefs, and an analysis loop
-that gives the agent ears.
+Working. Drone + verbal control, granular drum voices (kick/snare/hat/clap with 16-step
+lanes), a note sequencer, the effect chain, live sampling (rip the master into a looping
+voice), per-module start/stop, and CV modulation (lfo/arp patch cables) all run — from
+the REPL or the Textual TUI rack (`live/tui.py`). Cables are wired by conversation for
+now; free-drag patching, live meters, and an arrangement/song layer are next, along with
+an agent that *builds* new SynthDefs and an analysis loop that gives it ears.
 
 ## License
 

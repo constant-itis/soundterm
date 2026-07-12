@@ -104,6 +104,17 @@ MODULE_REGISTRY = {
         "rate": (0.25, 4.0, "playback speed / pitch (1 = as recorded)"),
         "amp":  (0.0, 1.0, "sample level")},
         "defaults": {"rate": 1.0, "amp": 0.6}},
+    # --- CV modulators (role "cv"): make no audio; write a control signal that a
+    # target param /n_maps onto. `cv_out` tells the engine how to fit the signal to
+    # the target: "range" = set the source's lo/hi from the target param's spec;
+    # "raw" = the source already emits target units (arp emits Hz). ------------------
+    "lfo": {"role": "cv", "def": "cvLfo", "cv_out": "range", "specs": {
+        "rate": (0.01, 30.0, "sweep speed in Hz")},
+        "defaults": {"rate": 0.5}},
+    "arp": {"role": "cv", "def": "cvArp", "cv_out": "raw", "specs": {
+        "bpm":  (40.0, 240.0, "arp tempo in BPM (plays 8th notes)"),
+        "root": (24.0, 72.0, "root MIDI note (48 = c3); arpeggiates root/+4/+7/+12")},
+        "defaults": {"bpm": 120.0, "root": 48.0}},
 }
 
 # the one param per node that acts as its gain/bypass: set it to 0 and a source goes
@@ -131,6 +142,7 @@ class Graph:
         self.params = {n: dict(p) for n, p in INITIAL.items()}
         self.modules = []          # ordered [{key, type, role, params, id}]
         self.enabled = {}          # node key -> bool; absent = running (True)
+        self.edges = []            # CV patch cables: [{src, dst, param}]
         self._counters = {}
 
     # ---- lookup -------------------------------------------------------------
@@ -150,9 +162,10 @@ class Graph:
         return m["params"] if m else None
 
     def node_keys(self):
+        cv = [m["key"] for m in self.modules if m["role"] == "cv"]
         srcs = [m["key"] for m in self.modules if m["role"] == "source"]
         fx = [m["key"] for m in self.modules if m["role"] == "effect"]
-        return ["drone"] + srcs + fx + ["reverb"]
+        return cv + ["drone"] + srcs + fx + ["reverb"]
 
     # ---- edits --------------------------------------------------------------
     def clamp(self, node, param, value):
@@ -191,7 +204,42 @@ class Graph:
         if m:
             self.modules.remove(m)
             self.enabled.pop(key, None)
+            self.edges = [e for e in self.edges
+                          if e["src"] != key and e["dst"] != key]
         return m
+
+    # ---- CV patch cables (control-rate modulation edges) -------------------
+    def connect(self, src, dst, param):
+        """Wire CV source `src` onto `dst.param`. Both must exist; `src` must be a
+        cv module and `param` a real param of `dst`. Idempotent."""
+        sm = self._mod(src)
+        if sm is None or sm["role"] != "cv":
+            raise KeyError(f"{src} is not a CV source")
+        if dst not in self.node_keys():
+            raise KeyError(dst)
+        if param not in (self.specs_for(dst) or {}):
+            raise KeyError(f"{dst}.{param}")
+        edge = {"src": src, "dst": dst, "param": param}
+        if edge not in self.edges:
+            self.edges.append(edge)
+        return edge
+
+    def disconnect(self, src, dst, param):
+        edge = {"src": src, "dst": dst, "param": param}
+        if edge in self.edges:
+            self.edges.remove(edge)
+            return edge
+        return None
+
+    def modulators_of(self, dst, param):
+        return [e["src"] for e in self.edges
+                if e["dst"] == dst and e["param"] == param]
+
+    def is_modulated(self, dst, param):
+        return bool(self.modulators_of(dst, param))
+
+    def edges_touching(self, key):
+        return [e for e in self.edges if e["src"] == key or e["dst"] == key]
 
     # ---- start / stop (non-destructive mute/bypass) -------------------------
     def bypass_param(self, node):
@@ -261,7 +309,9 @@ class Graph:
             for p, (lo, hi, desc) in specs.items():
                 if p.startswith("step"):
                     continue
-                lines.append(f"  {label}.{p} = {cur[p]:g}  [{lo:g}..{hi:g}]  {desc}")
+                mods = self.modulators_of(node, p)
+                tag = f"  <-- modulated by {', '.join(mods)}" if mods else ""
+                lines.append(f"  {label}.{p} = {cur[p]:g}  [{lo:g}..{hi:g}]  {desc}{tag}")
             if step_keys:                                     # compact the 8/16-step lanes
                 if all(specs[k][1] <= 1.0 for k in step_keys):
                     pat = "".join("x" if cur[k] > 0 else "." for k in step_keys)
@@ -285,4 +335,4 @@ class Graph:
     def save(self, path):
         with open(path, "w") as f:
             json.dump({"params": self.params, "modules": self.modules,
-                       "enabled": self.enabled}, f, indent=2)
+                       "enabled": self.enabled, "edges": self.edges}, f, indent=2)

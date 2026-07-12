@@ -160,6 +160,30 @@ SynthDef(\sampler, { |out = 16, buf = 0, rate = 1.0, amp = 0.5|
     Out.ar(out, (sig * amp));
 }).writeDefFile(dir);
 
+// --- CV modulators: control-rate sources for the patch graph --------------------
+// These make NO audio. Each writes a control signal to a control bus (`out`); a
+// target module then /n_maps one of its params to that bus, so the param moves on
+// its own. This is the bridge from the fixed audio chain to a rewirable patch graph.
+// They sit at the HEAD of the root group so their bus is fresh before anyone reads it.
+
+// An LFO: a sine sweeping between lo..hi. On connect the engine sets lo/hi from the
+// target param's range (a musical window around its current value), so mapping it
+// onto e.g. drone.cutoff sweeps the filter without the user computing Hz.
+SynthDef(\cvLfo, { |out = 0, rate = 1.0, lo = 0.0, hi = 1.0|
+    Out.kr(out, SinOsc.kr(rate.clip(0.001, 60.0)).range(lo, hi));
+}).writeDefFile(dir);
+
+// An arpeggiator: walks a maj7 arpeggio (root, +4, +7, +12) at bpm and outputs the
+// note as frequency (Hz). Map it onto a pitch param (drone.freq / seq is stepped)
+// to turn a static voice into a moving line.
+SynthDef(\cvArp, { |out = 0, bpm = 120, root = 48|
+    var clk, idx, note;
+    clk = Impulse.kr(bpm / 60 * 2);            // 8th-note steps
+    idx = Stepper.kr(clk, 0, 0, 3);
+    note = root + Select.kr(idx, [0, 4, 7, 12]);
+    Out.kr(out, note.midicps);
+}).writeDefFile(dir);
+
 // --- master: stereo reverb + safety limiter ------------------------------------
 SynthDef(\fxReverb, { |in = 16, out = 0, mix = 0.3, room = 0.7, damp = 0.5, amp = 0.9|
     var dry, wet;
@@ -169,6 +193,6 @@ SynthDef(\fxReverb, { |in = 16, out = 0, mix = 0.3, room = 0.7, damp = 0.5, amp 
     Out.ar(out, wet * amp);
 }).writeDefFile(dir);
 
-"[build] wrote drone + drum + kick + snare + hat + clap + seq + delay + tremolo + drive + capture + sampler + reverb".postln;
+"[build] wrote drone + drum + kick + snare + hat + clap + seq + delay + tremolo + drive + capture + sampler + cvLfo + cvArp + reverb".postln;
 0.exit;
 )

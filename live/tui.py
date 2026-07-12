@@ -37,10 +37,16 @@ class ParamRow(Widget):
         self._value = float(value)
         self.on_change = on_change
         self._drag = False
+        self._mod_src = None       # set to a CV source key when a cable drives this
 
     def render(self):
         w = max(self.size.width, LABEL_W + 3)
         barw = max(1, w - LABEL_W - 1)
+        if self._mod_src:                                  # driven by a patch cable
+            src = f"«{self._mod_src}"[:LABEL_W - 1]
+            markup = (f"[{TEAL}]~{self.param[:8]:<8}[/][{TEAL}]{src:>6}[/] "
+                      f"[{TEAL}]{'┈' * barw}[/]")
+            return Text.from_markup(markup)
         frac = 0.0 if self.hi == self.lo else (self._value - self.lo) / (self.hi - self.lo)
         frac = min(1.0, max(0.0, frac))
         fill = round(frac * barw)
@@ -48,6 +54,10 @@ class ParamRow(Widget):
         markup = (f"[{GREY}]{self.param[:9]:<9}[/][{AMBER}]{val:>6}[/] "
                   f"[{AMBER}]{'█' * fill}[/][{TRACK}]{'─' * (barw - fill)}[/]")
         return Text.from_markup(markup)
+
+    def set_modulated(self, src):
+        self._mod_src = src
+        self.refresh()
 
     def _apply(self, x):
         w = max(self.size.width, LABEL_W + 3)
@@ -64,6 +74,9 @@ class ParamRow(Widget):
         self.refresh()
 
     def on_mouse_down(self, e):
+        if self._mod_src:                                  # a cable owns this param
+            self.focus()
+            return
         self.focus(); self.capture_mouse(); self._drag = True; self._apply(e.x)
 
     def on_mouse_move(self, e):
@@ -274,7 +287,10 @@ class Soundterm(App):
                     self.engine.spawn_module(mod)
                     self.query_one("#rack").mount(ModulePanel(mod["key"], self.graph, self._on_param))
                 elif kind == "remove":
-                    node, _ = self.graph.resolve(op.get("node"), op.get("node"))
+                    node = self.graph.resolve_node(op.get("node"))
+                    for e in self.graph.edges_touching(node):   # pull cables first
+                        self.engine.disconnect(e)
+                        self._mark_modulated(e["dst"], e["param"], None)
                     mod = self.graph.remove_module(node)
                     if mod:
                         self.engine.free_module(mod)
@@ -282,6 +298,18 @@ class Soundterm(App):
                             self.query_one(f"#panel-{node}").remove()
                         except Exception:
                             pass
+                elif kind == "connect":
+                    src = self.graph.resolve_node(op.get("src"))
+                    dst, param = self.graph.resolve(op.get("node"), op.get("param"))
+                    self.graph.connect(src, dst, param)
+                    self.engine.connect({"src": src, "dst": dst, "param": param})
+                    self._mark_modulated(dst, param, src)
+                elif kind == "disconnect":
+                    src = self.graph.resolve_node(op.get("src"))
+                    dst, param = self.graph.resolve(op.get("node"), op.get("param"))
+                    if self.graph.disconnect(src, dst, param):
+                        self.engine.disconnect({"src": src, "dst": dst, "param": param})
+                        self._mark_modulated(dst, param, None)
                 elif kind == "toggle":
                     node = self.graph.resolve_node(op.get("node"))
                     val = op.get("value")
@@ -311,6 +339,13 @@ class Soundterm(App):
             except Exception:
                 pass
         self._set_status(say or "done")
+
+    def _mark_modulated(self, node, param, src):
+        """Reflect a connect/disconnect on the target's param bar."""
+        try:
+            self.query_one(f"#row-{node}-{param}", ParamRow).set_modulated(src)
+        except Exception:
+            pass
 
     def _set_status(self, msg):
         self.last_status = msg

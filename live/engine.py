@@ -32,6 +32,7 @@ class Engine:
         self.osc = None
         self._next_fx_id = FX_ID_BASE
         self._next_buf = 0            # sample buffers count up from 0
+        self._next_ctrl_bus = 0       # control buses for CV cables count up from 0
         self.sr = 48000.0             # server sample rate, read on boot
 
     # ---- lifecycle ----------------------------------------------------------
@@ -70,13 +71,13 @@ class Engine:
 
     def _load_defs(self):
         # /d_loadDir is reliable (single-file /d_load no-ops on scsynth 3.11);
-        # confirm via /status because /done alone can lie. 13 defs expected.
+        # confirm via /status because /done alone can lie. 15 defs expected.
         self.osc.send("/d_loadDir", DEFDIR)
         self.osc.wait_for("/done", 4.0)
         deadline = time.monotonic() + 3.0
         while time.monotonic() < deadline:
             self.osc.send("/status")
-            if self.osc.wait_for("/status.reply", 2.0)[4] >= 13:
+            if self.osc.wait_for("/status.reply", 2.0)[4] >= 15:
                 return
             time.sleep(0.1)
         raise RuntimeError("synthdefs did not register")
@@ -107,6 +108,10 @@ class Engine:
         return float(value)
 
     def push(self, node, param, value):
+        # a modulated param is driven by a CV bus; an /n_set here would UNMAP it,
+        # so leave it alone until the cable is pulled (disconnect restores it).
+        if self.graph.is_modulated(node, param):
+            return
         nid = self._node_id(node)
         if nid is not None:
             self.osc.send("/n_set", nid, param, self._effective(node, param, value))
@@ -130,7 +135,13 @@ class Engine:
         reg = MODULE_REGISTRY[mod["type"]]
         mod["id"] = self._next_fx_id
         self._next_fx_id += 1
-        if reg["role"] == "source":
+        if reg["role"] == "cv":
+            # a CV source makes no audio: it writes a control signal to its own
+            # control bus. Sits at the head so its bus is fresh before anyone reads.
+            mod["cvbus"] = self._next_ctrl_bus
+            self._next_ctrl_bus += 1
+            self.osc.send("/s_new", reg["def"], mod["id"], ADD_TO_HEAD, 0, "out", mod["cvbus"])
+        elif reg["role"] == "source":
             args = [reg["def"], mod["id"], ADD_AFTER, DRONE_ID, "out", FX_BUS]
             if mod["type"] == "sampler":
                 args += ["buf", int(mod.get("buf", 0))]
@@ -142,6 +153,33 @@ class Engine:
             raise RuntimeError(f"module spawn failed: {early[1]}")
         for p, v in mod["params"].items():
             self.osc.send("/n_set", mod["id"], p, float(v))
+
+    # ---- CV patch cables ----------------------------------------------------
+    def connect(self, edge):
+        """Realize a graph edge: map dst.param to the source's control bus. For a
+        `range` source (lfo) first fit its lo/hi to a musical window around the
+        target's current value so the sweep lands in range."""
+        sm = self.graph._mod(edge["src"])
+        dstid = self._node_id(edge["dst"])
+        if not sm or dstid is None:
+            return
+        reg = MODULE_REGISTRY[sm["type"]]
+        if reg.get("cv_out") == "range":
+            lo, hi, _ = self.graph.specs_for(edge["dst"])[edge["param"]]
+            cur = float(self.graph.node_params(edge["dst"])[edge["param"]])
+            span = 0.2 * (hi - lo)
+            self.osc.send("/n_set", sm["id"],
+                          "lo", max(lo, cur - span), "hi", min(hi, cur + span))
+        self.osc.send("/n_map", dstid, edge["param"], sm["cvbus"])
+
+    def disconnect(self, edge):
+        """Pull the cable: unmap (bus -1) and restore the stored scalar value."""
+        dstid = self._node_id(edge["dst"])
+        if dstid is None:
+            return
+        self.osc.send("/n_map", dstid, edge["param"], -1)
+        stored = self.graph.node_params(edge["dst"])[edge["param"]]
+        self.osc.send("/n_set", dstid, edge["param"], float(stored))
 
     def free_module(self, mod):
         if mod and mod.get("id") is not None:

@@ -79,6 +79,51 @@ async def main():
         assert app.graph.node_params(kk)["step2"] == 1.0, "agent step edit did not take"
         print("OK — granular drums good")
 
+        # CV modulation (patch graph): add an lfo, cable it onto drone.cutoff so the
+        # filter sweeps; the target bar shows as driven and can't be dragged. Then an
+        # arp onto drone.freq. Disconnect restores the bar.
+        app._apply_ops([{"op": "add", "type": "lfo"}], "add lfo")
+        await pilot.pause(); await asyncio.sleep(0.3)
+        lfos = [m for m in app.graph.modules if m["type"] == "lfo"]
+        assert lfos and lfos[0]["role"] == "cv", "lfo not added as a cv module"
+        lkey = lfos[0]["key"]
+        assert app.query_one(f"#panel-{lkey}", ModulePanel), "no lfo panel"
+        assert app.query_one(f"#row-{lkey}-rate", ParamRow), "lfo has no rate bar"
+
+        cutoff_row = app.query_one("#row-drone-cutoff", ParamRow)
+        app._apply_ops([{"op": "connect", "src": lkey, "node": "drone", "param": "cutoff"}], "sweep it")
+        await pilot.pause()
+        assert app.graph.is_modulated("drone", "cutoff"), "edge not recorded in graph"
+        assert lfos[0].get("cvbus") is not None, "lfo never got a control bus"
+        assert cutoff_row._mod_src == lkey, "target bar not marked modulated"
+        # a modulated param must ignore drag (an /n_set would unmap the cable)
+        cutoff_row._value = 999.0
+        cutoff_row.on_mouse_down(type("E", (), {"x": 30})())
+        assert cutoff_row._value == 999.0, "modulated bar should not respond to drag"
+        # the engine must skip pushing a modulated param
+        app.engine.push("drone", "cutoff", 123.0)   # no-op while modulated
+
+        app._apply_ops([{"op": "add", "type": "arp"}], "add arp")
+        await pilot.pause(); await asyncio.sleep(0.3)
+        arps = [m for m in app.graph.modules if m["type"] == "arp"]
+        assert arps, "arp not added"
+        akey = arps[0]["key"]
+        app._apply_ops([{"op": "connect", "src": akey, "node": "drone", "param": "freq"}], "arp pitch")
+        await pilot.pause(); await asyncio.sleep(0.6)     # let the arp walk a few notes
+        assert app.graph.is_modulated("drone", "freq"), "arp edge not recorded"
+        assert app.query_one("#row-drone-freq", ParamRow)._mod_src == akey, "freq not marked"
+
+        app._apply_ops([{"op": "disconnect", "src": lkey, "node": "drone", "param": "cutoff"}], "unpatch")
+        await pilot.pause()
+        assert not app.graph.is_modulated("drone", "cutoff"), "disconnect left the edge"
+        assert cutoff_row._mod_src is None, "target bar still marked after disconnect"
+        # removing a cv source pulls its remaining cables
+        app._apply_ops([{"op": "remove", "node": akey}], "yank arp")
+        await pilot.pause()
+        assert not app.graph.is_modulated("drone", "freq"), "removing arp left it modulating"
+        assert app.query_one("#row-drone-freq", ParamRow)._mod_src is None, "freq still driven"
+        print("OK — cv modulation good")
+
 
 if __name__ == "__main__":
     asyncio.run(main())
