@@ -205,6 +205,26 @@ class Engine:
         if mod and mod.get("id") is not None:
             self.osc.send("/n_free", mod["id"])
 
+    # ---- load a whole patch -------------------------------------------------
+    def rebuild_from_graph(self):
+        """Tear down every live node and rebuild the server from the graph's current
+        state (after graph.load). Frees all nodes, respawns the fixed infra + every
+        module, re-patches the CV cables, then reconciles params and start/stop."""
+        self.osc.send("/g_freeAll", 0)
+        self.osc.send("/s_new", "droneVoice", DRONE_ID, ADD_TO_HEAD, 0, "out", FX_BUS)
+        self.osc.send("/s_new", "fxReverb", REVERB_ID, ADD_AFTER, DRONE_ID, "in", FX_BUS, "out", 0)
+        self.osc.send("/s_new", "masterMeter", METER_ID, ADD_TO_TAIL, 0,
+                      "in", 0, "outL", METER_L, "outR", METER_R)
+        # modules in stored order → effect-chain order is preserved
+        for mod in self.graph.modules:
+            mod["id"] = None
+            self.spawn_module(mod)
+        for e in self.graph.edges:
+            self.connect(e)
+        self.reconcile_all()
+        for node in self.graph.node_keys():
+            self.apply_enabled(node)
+
     # ---- sampling -----------------------------------------------------------
     def start_capture(self, seconds=4.0, in_bus=0):
         """Rip `seconds` of the live stereo master (bus `in_bus`) into a fresh

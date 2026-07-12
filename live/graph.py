@@ -336,3 +336,47 @@ class Graph:
         with open(path, "w") as f:
             json.dump({"params": self.params, "modules": self.modules,
                        "enabled": self.enabled, "edges": self.edges}, f, indent=2)
+
+    def load(self, path):
+        with open(path) as f:
+            self._load_state(json.load(f))
+
+    def _load_state(self, data):
+        """Replace the whole patch from a saved dict — params, modules, cables, and
+        start/stop states. Everything is clamped/validated against the current specs,
+        so an old or hand-edited file can't push the engine out of range. Node ids are
+        reset to None; the engine respawns and reassigns them."""
+        self.params = {n: dict(v) for n, v in INITIAL.items()}
+        for n, ps in (data.get("params") or {}).items():
+            if n in self.params:
+                for p, v in ps.items():
+                    if p in PARAM_SPECS[n]:
+                        lo, hi, _ = PARAM_SPECS[n][p]
+                        self.params[n][p] = max(lo, min(hi, float(v)))
+        self.modules, self._counters = [], {}
+        for m in (data.get("modules") or []):
+            t = m.get("type")
+            if t not in MODULE_REGISTRY:
+                continue
+            reg = MODULE_REGISTRY[t]
+            params = dict(reg["defaults"])
+            for p, v in (m.get("params") or {}).items():
+                if p in reg["specs"]:
+                    lo, hi, _ = reg["specs"][p]
+                    params[p] = max(lo, min(hi, float(v)))
+            mod = {"key": m.get("key"), "type": t, "role": reg["role"],
+                   "params": params, "id": None}
+            if "buf" in m:
+                mod["buf"] = int(m["buf"])
+            if not mod["key"]:
+                self._counters[t] = self._counters.get(t, 0) + 1
+                mod["key"] = f"{t}{self._counters[t]}"
+            self.modules.append(mod)
+            k = mod["key"]                                  # keep counters ahead of loaded keys
+            if k.startswith(t) and k[len(t):].isdigit():
+                self._counters[t] = max(self._counters.get(t, 0), int(k[len(t):]))
+        keys = set(self.node_keys())
+        self.enabled = {k: bool(v) for k, v in (data.get("enabled") or {}).items() if k in keys}
+        self.edges = [{"src": e["src"], "dst": e["dst"], "param": e["param"]}
+                      for e in (data.get("edges") or [])
+                      if e.get("src") in keys and e.get("dst") in keys and "param" in e]

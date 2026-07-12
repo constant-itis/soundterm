@@ -15,6 +15,8 @@ from agent import Agent
 from engine import Engine
 from graph import Graph
 
+PATCH_DIR = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "patches"))
+
 # ---- tiny ANSI palette (semantic tokens — the "CSS for the TUI" starts here) ----
 DIM = "\033[2m"; BOLD = "\033[1m"; RST = "\033[0m"
 AMBER = "\033[38;5;179m"; TEAL = "\033[38;5;73m"; RED = "\033[38;5;167m"
@@ -39,10 +41,22 @@ HELP = f"""{BOLD}commands{RST}
   {AMBER}<anything>{RST}     describe how the sound should change (goes to the agent)
   {AMBER}/state{RST}         show the current patch + effect chain
   {AMBER}/model <m>{RST}     switch agent: local | opus | sonnet | haiku
-  {AMBER}/save [f]{RST}      save patch to f (default patch.json)
+  {AMBER}/save [name]{RST}   save the whole patch (default 'patch')
+  {AMBER}/load <name>{RST}   load a saved patch · {AMBER}/patches{RST} to list
   {AMBER}/panic{RST}         duck to silence
   {AMBER}/help{RST}          this
   {AMBER}/quit{RST}          leave"""
+
+
+def _patch_path(name):
+    return os.path.join(PATCH_DIR, name + ".json")
+
+
+def _list_patches():
+    try:
+        return sorted(f[:-5] for f in os.listdir(PATCH_DIR) if f.endswith(".json"))
+    except FileNotFoundError:
+        return []
 
 
 def main():
@@ -81,9 +95,21 @@ def main():
                 print(f"{GREY}model: {agent.backend}{RST}")
             elif line.startswith("/save"):
                 parts = line.split(maxsplit=1)
-                path = parts[1] if len(parts) > 1 else "patch.json"
-                graph.save(path)
-                print(f"{GREY}saved -> {path}{RST}")
+                name = parts[1].strip() if len(parts) > 1 else "patch"
+                os.makedirs(PATCH_DIR, exist_ok=True)
+                graph.save(_patch_path(name))
+                print(f"{GREY}saved -> {name}{RST}")
+            elif line.startswith("/patches"):
+                print(f"{GREY}patches: {', '.join(_list_patches()) or '(none)'}{RST}")
+            elif line.startswith("/load"):
+                parts = line.split(maxsplit=1)
+                if len(parts) > 1 and os.path.exists(_patch_path(parts[1].strip())):
+                    graph.load(_patch_path(parts[1].strip()))
+                    engine.rebuild_from_graph()
+                    print(f"{GREY}loaded <- {parts[1].strip()}{RST}")
+                    show_state(graph)
+                else:
+                    print(f"{RED}no such patch{RST} — /patches to list")
             elif line.startswith("/"):
                 print(f"{RED}unknown command{RST} — /help")
             else:

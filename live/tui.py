@@ -5,6 +5,7 @@ Non-destructive: reuses the SAME engine/graph/agent as the REPL. Each module is 
 box in a horizontal rack; each param is a bar you drag with the mouse. The prompt
 bar talks to the agent; the +buttons add modules by hand. Both edit one live patch.
 """
+import os
 import time
 
 from rich.text import Text
@@ -22,6 +23,7 @@ from graph import Graph, MODULE_REGISTRY
 # semantic tokens (the themeable palette — same ones the doc/README use)
 AMBER = "#f2b84b"; TEAL = "#45d6c9"; GREY = "#8a95a6"; TRACK = "#2c3646"
 LABEL_W = 16
+PATCH_DIR = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "patches"))
 
 
 class ParamRow(Widget):
@@ -360,7 +362,7 @@ class Soundterm(App):
         self.query_one("#rack").mount(ModulePanel(mod["key"], self.graph, self._on_param))
         self._set_status(f"captured → {mod['key']} · looping (space to stop)")
 
-    def on_input_submitted(self, event):
+    async def on_input_submitted(self, event):
         text = event.value.strip()
         event.input.value = ""
         if not text:
@@ -371,8 +373,66 @@ class Soundterm(App):
                 self.agent.backend = parts[1]
             self._set_status(f"model {self.agent.backend}")
             return
+        if text.startswith("/save"):
+            parts = text.split(maxsplit=1)
+            self._save_patch(parts[1].strip() if len(parts) > 1 else "patch")
+            return
+        if text.startswith("/load"):
+            parts = text.split(maxsplit=1)
+            if len(parts) > 1:
+                await self._load_patch(parts[1].strip())
+            else:
+                self._set_status("usage: /load <name>  (/patches to list)")
+            return
+        if text.startswith("/patches"):
+            self._set_status("patches: " + (", ".join(self._list_patches()) or "(none)"))
+            return
         self._set_status(f"… {text}")
         self._run_agent(text)
+
+    # ---- save / load whole patches ------------------------------------------
+    def _patch_path(self, name):
+        return os.path.join(PATCH_DIR, name + ".json")
+
+    def _list_patches(self):
+        try:
+            return sorted(f[:-5] for f in os.listdir(PATCH_DIR) if f.endswith(".json"))
+        except FileNotFoundError:
+            return []
+
+    def _save_patch(self, name):
+        os.makedirs(PATCH_DIR, exist_ok=True)
+        self.graph.save(self._patch_path(name))
+        self._set_status(f"saved patch → {name}")
+
+    async def _load_patch(self, name):
+        if not os.path.exists(self._patch_path(name)):
+            self._set_status(f"no patch '{name}' (/patches to list)")
+            return
+        self._close_menu()
+        self.graph.load(self._patch_path(name))
+        self.engine.rebuild_from_graph()
+        await self._rebuild_rack()
+        self._set_status(f"loaded patch ← {name}")
+
+    async def _rebuild_rack(self):
+        rack = self.query_one("#rack")
+        await rack.remove_children()                     # await teardown before remount
+        for node in self.graph.node_keys():
+            await rack.mount(ModulePanel(node, self.graph, self._on_param))
+        self.call_after_refresh(self._reflect_state)
+
+    def _reflect_state(self):
+        """After a rebuild, re-mark modulated params and stopped modules on the fresh
+        panels."""
+        for e in self.graph.edges:
+            self._mark_modulated(e["dst"], e["param"], e["src"])
+        for node in self.graph.node_keys():
+            if not self.graph.is_enabled(node):
+                try:
+                    self.query_one(f"#panel-{node}", ModulePanel).set_enabled(False)
+                except Exception:
+                    pass
 
     @work(thread=True, exclusive=True, group="agent")
     def _run_agent(self, text):

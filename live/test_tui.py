@@ -198,6 +198,33 @@ async def main():
         assert sr._play == -1, "stopped lane should park the playhead"
         print("OK — meters + playhead good")
 
+        # save / load a whole patch: build something distinctive, save, wreck it, reload
+        import os as _os
+        import tempfile
+        app._apply_ops([{"op": "add", "type": "delay"}], "add delay")
+        await pilot.pause(); await asyncio.sleep(0.2)
+        dkey = [m for m in app.graph.modules if m["type"] == "delay"][0]["key"]
+        app._apply_ops([{"op": "set", "node": dkey, "param": "mix", "value": 0.77}], "")
+        app._apply_ops([{"op": "set", "node": "drone", "param": "cutoff", "value": 456}], "")
+        await pilot.pause()
+        n_mods = len(app.graph.modules)
+        saved_edges = [dict(e) for e in app.graph.edges]
+        tmp = _os.path.join(tempfile.gettempdir(), "soundterm_test_patch.json")
+        app.graph.save(tmp)
+        app._apply_ops([{"op": "set", "node": "drone", "param": "cutoff", "value": 40}], "wreck")
+        app.graph.load(tmp)                             # reload the saved patch
+        app.engine.rebuild_from_graph()
+        await app._rebuild_rack()
+        await pilot.pause(); await asyncio.sleep(0.3)
+        assert len(app.graph.modules) == n_mods, "module count changed across save/load"
+        assert app.graph.node_params("drone")["cutoff"] == 456.0, "param not restored"
+        dk2 = [m for m in app.graph.modules if m["type"] == "delay"][0]["key"]
+        assert abs(app.graph.node_params(dk2)["mix"] - 0.77) < 1e-6, "module param not restored"
+        assert [dict(e) for e in app.graph.edges] == saved_edges, "edges not restored"
+        assert app.query_one("#panel-drone", ModulePanel), "rack not rebuilt after load"
+        _os.remove(tmp)
+        print("OK — save/load good")
+
 
 if __name__ == "__main__":
     asyncio.run(main())

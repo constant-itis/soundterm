@@ -66,7 +66,7 @@ Then talk to it. `/help` lists commands.
 | `<anything>` | describe how the sound should change → the agent |
 | `/model <m>` | switch brain: `local` · `haiku` · `sonnet` · `opus` |
 | `/state` | show the patch + chain |
-| `/save [f]` | save the patch to JSON |
+| `/save [name]` · `/load <name>` | save / restore the whole patch — modules, params, cables, start-stop (`/patches` lists them) |
 | `/panic` | duck to silence · `/quit` to leave |
 
 Notes are MIDI numbers in the sequencer (c3 = 48, c4 = 60); Claude translates note

@@ -7,6 +7,9 @@ __pycache__/
 # python venv (TUI dependency, not committed)
 .venv/
 
+# saved patches are personal; share one deliberately with `git add -f`
+patches/
+
 # scratch
 /tmp/
 *.log
