@@ -27,12 +27,24 @@ Each op is one of:
   {"op": "set", "node": "<node>", "param": "<param>", "value": <number>}
   {"op": "add", "type": "<module type>"}
   {"op": "remove", "node": "<module node>"}
+  {"op": "toggle", "node": "<node>", "value": <true = start, false = stop>}
+  {"op": "sample", "seconds": <how many seconds of the live sound to capture>}
 
 Rules:
+- To STOP / MUTE / PAUSE / SILENCE a module without deleting it, use toggle with
+  value false; to START / UNMUTE / bring it back, use value true. Prefer toggle over
+  remove for stop/start language — remove is only for permanently deleting a module.
+- To SAMPLE / RECORD / CAPTURE / "grab" / "rip" the current live sound into a looping
+  sampler voice, use {"op":"sample","seconds":N} (default 4). It records the mix and
+  adds a sampler module that loops the captured chunk back through the chain.
 - For "set", use ABSOLUTE values within range. Read the CURRENT values below and
   compute the new absolute value for relative requests ("darker", "more space").
-- To add RHYTHM add a "drum"; to play/sequence NOTES add a "seq". Add a module only
-  when the chain lacks that capability; otherwise just set params on what's there.
+- For DRUMS, add individual voices — "kick", "snare", "hat", "clap". Each has its own
+  bpm/tone/decay/level and a 16-step gate step0..step15 (1 = hit, 0 = rest). Program a
+  beat by setting steps: four-on-the-floor kick = step0/step4/step8/step12 = 1; backbeat
+  snare = step4/step12 = 1; 8th-note hats = even steps = 1. ("drum" is an older combined
+  kick+hat voice — prefer the separate voices.) To play/sequence NOTES add a "seq".
+  Add a module only when the chain lacks that capability; otherwise set params on what's there.
 - A "seq" has step0..step7, each a MIDI note (0 = rest). To play a melody, set the
   steps: middle C is 60, c3=48, so "c3 e3 g3" -> step0=48, step1=52, step2=55, rest 0.
 - If the user asks for something impossible, do it the closest supported way and say

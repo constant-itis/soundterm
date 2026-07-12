@@ -79,6 +79,87 @@ SynthDef(\seqVoice, { |out = 16, bpm = 120, cutoff = 2000, res = 0.3, amp = 0.3,
     Out.ar(out, (sig * amp).dup);
 }).writeDefFile(dir);
 
+// --- stepped drum voices: each its own module, 16-step on/off pattern -----------
+// Every voice self-clocks at bpm (16th notes), walks a 16-step gate, and triggers
+// its drum sound on steps set to 1. Free-running by design — each voice on its own
+// clock. step0..step15 are set individually via /n_set.
+SynthDef(\kickVoice, { |out = 16, bpm = 120, tone = 50, decay = 0.3, level = 0.9,
+        step0=1,step1=0,step2=0,step3=0,step4=1,step5=0,step6=0,step7=0,
+        step8=1,step9=0,step10=0,step11=0,step12=1,step13=0,step14=0,step15=0|
+    var clk, idx, steps, cur, trig, kfreq, env, sig;
+    clk = Impulse.kr(bpm / 60 * 4);
+    idx = Stepper.kr(clk, 0, 0, 15);
+    steps = [step0,step1,step2,step3,step4,step5,step6,step7,
+             step8,step9,step10,step11,step12,step13,step14,step15];
+    cur = Select.kr(idx, steps);
+    trig = clk * (cur > 0);
+    kfreq = EnvGen.ar(Env([tone * 6, tone], [0.06], \exp), trig);
+    env = EnvGen.ar(Env.perc(0.002, decay), trig);
+    sig = (SinOsc.ar(kfreq) * env * 1.6).tanh;
+    Out.ar(out, (sig * level).dup);
+}).writeDefFile(dir);
+
+SynthDef(\snareVoice, { |out = 16, bpm = 120, tone = 220, decay = 0.18, level = 0.7,
+        step0=0,step1=0,step2=0,step3=0,step4=1,step5=0,step6=0,step7=0,
+        step8=0,step9=0,step10=0,step11=0,step12=1,step13=0,step14=0,step15=0|
+    var clk, idx, steps, cur, trig, env, body, noise, sig;
+    clk = Impulse.kr(bpm / 60 * 4);
+    idx = Stepper.kr(clk, 0, 0, 15);
+    steps = [step0,step1,step2,step3,step4,step5,step6,step7,
+             step8,step9,step10,step11,step12,step13,step14,step15];
+    cur = Select.kr(idx, steps);
+    trig = clk * (cur > 0);
+    env = EnvGen.ar(Env.perc(0.002, decay), trig);
+    body = SinOsc.ar(tone) * env * 0.5;
+    noise = HPF.ar(WhiteNoise.ar, 1200) * env * 0.8;
+    sig = (body + noise).tanh;
+    Out.ar(out, (sig * level).dup);
+}).writeDefFile(dir);
+
+SynthDef(\hatVoice, { |out = 16, bpm = 120, tone = 9000, decay = 0.05, level = 0.4,
+        step0=1,step1=0,step2=1,step3=0,step4=1,step5=0,step6=1,step7=0,
+        step8=1,step9=0,step10=1,step11=0,step12=1,step13=0,step14=1,step15=0|
+    var clk, idx, steps, cur, trig, env, sig;
+    clk = Impulse.kr(bpm / 60 * 4);
+    idx = Stepper.kr(clk, 0, 0, 15);
+    steps = [step0,step1,step2,step3,step4,step5,step6,step7,
+             step8,step9,step10,step11,step12,step13,step14,step15];
+    cur = Select.kr(idx, steps);
+    trig = clk * (cur > 0);
+    env = EnvGen.ar(Env.perc(0.001, decay), trig);
+    sig = HPF.ar(WhiteNoise.ar, tone.clip(2000, 16000)) * env;
+    Out.ar(out, (sig * level).dup);
+}).writeDefFile(dir);
+
+SynthDef(\clapVoice, { |out = 16, bpm = 120, tone = 1500, decay = 0.2, level = 0.6,
+        step0=0,step1=0,step2=0,step3=0,step4=1,step5=0,step6=0,step7=0,
+        step8=0,step9=0,step10=0,step11=0,step12=1,step13=0,step14=0,step15=0|
+    var clk, idx, steps, cur, trig, env, sig;
+    clk = Impulse.kr(bpm / 60 * 4);
+    idx = Stepper.kr(clk, 0, 0, 15);
+    steps = [step0,step1,step2,step3,step4,step5,step6,step7,
+             step8,step9,step10,step11,step12,step13,step14,step15];
+    cur = Select.kr(idx, steps);
+    trig = clk * (cur > 0);
+    env = EnvGen.ar(Env.perc(0.003, decay), trig);
+    sig = BPF.ar(WhiteNoise.ar, tone.clip(600, 3000), 0.6) * env * 2.0;
+    Out.ar(out, (sig * level).dup);
+}).writeDefFile(dir);
+
+// --- sampling: rip a chunk of the live output, play it back as a looping voice --
+// `capture` records the stereo master (bus `in` = 0) into `buf`, then frees itself
+// when the buffer is full. `sampler` is a source voice that loops a captured buffer
+// back onto the chain — the bridge from the free-running rack into fixed chunks.
+SynthDef(\capture, { |buf = 0, in = 0|
+    RecordBuf.ar(In.ar(in, 2), buf, loop: 0, doneAction: 2);
+}).writeDefFile(dir);
+
+SynthDef(\sampler, { |out = 16, buf = 0, rate = 1.0, amp = 0.5|
+    var sig;
+    sig = PlayBuf.ar(2, buf, rate * BufRateScale.kr(buf), loop: 1);
+    Out.ar(out, (sig * amp));
+}).writeDefFile(dir);
+
 // --- master: stereo reverb + safety limiter ------------------------------------
 SynthDef(\fxReverb, { |in = 16, out = 0, mix = 0.3, room = 0.7, damp = 0.5, amp = 0.9|
     var dry, wet;
@@ -88,6 +169,6 @@ SynthDef(\fxReverb, { |in = 16, out = 0, mix = 0.3, room = 0.7, damp = 0.5, amp 
     Out.ar(out, wet * amp);
 }).writeDefFile(dir);
 
-"[build] wrote drone + drum + seq + delay + tremolo + drive + reverb".postln;
+"[build] wrote drone + drum + kick + snare + hat + clap + seq + delay + tremolo + drive + capture + sampler + reverb".postln;
 0.exit;
 )

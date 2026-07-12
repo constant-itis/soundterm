@@ -53,6 +53,8 @@ def decode(data: bytes):
             args.append(struct.unpack_from(">i", data, i)[0]); i += 4
         elif t == "f":
             args.append(struct.unpack_from(">f", data, i)[0]); i += 4
+        elif t == "d":                                    # /status.reply sends SR as double
+            args.append(struct.unpack_from(">d", data, i)[0]); i += 8
         elif t == "s":
             s, i = _dstr(data, i); args.append(s)
         else:
