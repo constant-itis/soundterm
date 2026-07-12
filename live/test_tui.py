@@ -124,6 +124,61 @@ async def main():
         assert app.query_one("#row-drone-freq", ParamRow)._mod_src is None, "freq still driven"
         print("OK — cv modulation good")
 
+        # mouse patching: right-click menus emit the SAME connect/disconnect ops. lfo1
+        # still exists (unconnected). A right-clicked un-modulated param offers "patch
+        # from <src>" + add-and-patch shortcuts; a modulated one offers only "unpatch".
+        from tui import ContextMenu
+        assert any(m["type"] == "lfo" for m in app.graph.modules), "expected a leftover lfo"
+        items = app._param_menu_items("drone", "res")
+        labels = [l for l, _ in items]
+        assert any(l.startswith("◦ patch from") for l in labels), labels
+        assert any("＋" in l and "lfo" in l for l in labels), "no add-and-patch shortcut"
+        next(cb for l, cb in items if l.startswith("◦"))()      # pick "patch from lfoN"
+        await pilot.pause()
+        assert app.graph.is_modulated("drone", "res"), "menu patch did not connect"
+        assert app.query_one("#row-drone-res", ParamRow)._mod_src is not None, "bar not marked"
+        # a modulated param's menu is unpatch-only (n_map takes one source)
+        mitems = app._param_menu_items("drone", "res")
+        assert mitems and all(l.startswith("✕ unpatch") for l, _ in mitems), mitems
+        mitems[0][1]()                                          # unpatch
+        await pilot.pause()
+        assert not app.graph.is_modulated("drone", "res"), "menu unpatch did not disconnect"
+
+        # a genuine RIGHT-click on a param bar (button 3) routes to the menu
+        fake = type("E", (), {"button": 3, "screen_x": 6, "screen_y": 4,
+                              "x": 6, "y": 0, "stop": lambda self: None})()
+        app.query_one("#row-drone-res", ParamRow).on_mouse_down(fake)
+        await pilot.pause()
+        assert app.query(ContextMenu), "right-click did not open a menu"
+        app._close_menu()
+        await pilot.pause()
+
+        # the menu widget mounts + positions without error, and dismisses
+        app.open_param_menu("drone", "cutoff", 6, 4)
+        await pilot.pause()
+        assert app.query(ContextMenu), "context menu did not mount"
+        app._close_menu()
+        await pilot.pause()
+        assert not app.query(ContextMenu), "menu did not dismiss"
+
+        # add-and-patch in one gesture: a new lfo appears AND drives the param
+        n_lfo = len([m for m in app.graph.modules if m["type"] == "lfo"])
+        addcb = next(cb for l, cb in app._param_menu_items("drone", "cutoff")
+                     if "＋" in l and "lfo" in l)
+        addcb()
+        await pilot.pause(); await asyncio.sleep(0.2)
+        assert len([m for m in app.graph.modules if m["type"] == "lfo"]) == n_lfo + 1, "no new lfo"
+        assert app.graph.is_modulated("drone", "cutoff"), "add-and-patch did not connect"
+
+        # module menu: fixed endpoints can't be removed; a real module can
+        assert not any("remove" in l for l, _ in app._module_menu_items("drone")), "drone removable!"
+        km = [m for m in app.graph.modules if m["type"] == "kick"][0]["key"]
+        rm = next(cb for l, cb in app._module_menu_items(km) if "remove" in l)
+        rm()
+        await pilot.pause()
+        assert not any(m["key"] == km for m in app.graph.modules), "menu remove failed"
+        print("OK — mouse patching menus good")
+
 
 if __name__ == "__main__":
     asyncio.run(main())

@@ -44,8 +44,9 @@ conversation. Source voices add signal onto the bus; effects process it in place
 **Patch cables.** Beyond the audio chain, `lfo` and `arp` are *control* sources: they
 make no sound, but you *connect* their output onto any param and it moves on its own —
 an LFO sweeping `drone.cutoff`, an arpeggiator driving `drone.freq`. Connections are
-edges you add and pull (`connect`/`disconnect`); a modulated param is driven live and
-shows as such until you unpatch it. This is what makes the patch a graph, not a chain.
+edges you add and pull (`connect`/`disconnect`) — by talking, or by **right-clicking a
+param** in the rack and picking a source to patch from. A modulated param is driven live
+and shows as such until you unpatch it. This is what makes the patch a graph, not a chain.
 
 ## Run it
 
@@ -91,9 +92,9 @@ No third-party Python packages — stdlib only.
 Working. Drone + verbal control, granular drum voices (kick/snare/hat/clap with 16-step
 lanes), a note sequencer, the effect chain, live sampling (rip the master into a looping
 voice), per-module start/stop, and CV modulation (lfo/arp patch cables) all run — from
-the REPL or the Textual TUI rack (`live/tui.py`). Cables are wired by conversation for
-now; free-drag patching, live meters, and an arrangement/song layer are next, along with
-an agent that *builds* new SynthDefs and an analysis loop that gives it ears.
+the REPL or the Textual TUI rack (`live/tui.py`). Cables are wired by conversation or by
+right-click menu; free-drag cables, live meters, and an arrangement/song layer are next,
+along with an agent that *builds* new SynthDefs and an analysis loop that gives it ears.
 
 ## License
 

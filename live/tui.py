@@ -8,7 +8,7 @@ bar talks to the agent; the +buttons add modules by hand. Both edit one live pat
 from rich.text import Text
 from textual import work
 from textual.app import App, ComposeResult
-from textual.containers import Horizontal, HorizontalScroll
+from textual.containers import Container, Horizontal, HorizontalScroll
 from textual.containers import Vertical
 from textual.widget import Widget
 from textual.widgets import Button, Footer, Header, Input, Static
@@ -74,6 +74,10 @@ class ParamRow(Widget):
         self.refresh()
 
     def on_mouse_down(self, e):
+        if getattr(e, "button", 1) == 3:                   # right-click → patch menu
+            self.app.open_param_menu(self.node, self.param, e.screen_x, e.screen_y)
+            e.stop()
+            return
         if self._mod_src:                                  # a cable owns this param
             self.focus()
             return
@@ -119,6 +123,10 @@ class StepRow(Widget):
         return None
 
     def on_mouse_down(self, e):
+        if getattr(e, "button", 1) == 3:                   # right-click → module menu
+            self.app.open_module_menu(self.node, e.screen_x, e.screen_y)
+            e.stop()
+            return
         self.focus()
         i = self._cell_at(e.x)
         if i is not None:
@@ -164,13 +172,54 @@ class ModulePanel(Vertical):
         self.set_class(not on, "stopped")
         self._render_title()
 
+    def on_mouse_down(self, e):
+        if getattr(e, "button", 1) == 3:                   # right-click the box → menu
+            self.app.open_module_menu(self.node, e.screen_x, e.screen_y)
+            e.stop()
+
+
+class MenuItem(Static):
+    """One clickable row in a context menu. Runs its callback (which also closes the
+    menu) on click."""
+    def __init__(self, label, cb):
+        super().__init__(label, classes="ctxitem")
+        self._cb = cb
+
+    def on_mouse_down(self, e):
+        e.stop()
+        self._cb()
+
+
+class ContextMenu(Container):
+    """A small floating menu. Lives on the `overlay` layer inside a full-screen
+    backdrop that closes it on click-away; the app positions it at the cursor."""
+    def __init__(self, items, x, y):
+        super().__init__(id="ctxbackdrop")
+        self._items = items                 # [(label, callback)]
+        self._at = (x, y)
+
+    def compose(self) -> ComposeResult:
+        menu = Vertical(id="ctxmenu")
+        menu.styles.offset = self._at
+        with menu:
+            for label, cb in self._items:
+                yield MenuItem(label, cb)
+
+    def on_mouse_down(self, e):             # click-away (backdrop) closes
+        e.stop()
+        self.remove()
+
 
 class Soundterm(App):
     TITLE = "soundterm"
-    BINDINGS = [("ctrl+q", "quit", "quit")]
+    BINDINGS = [("ctrl+q", "quit", "quit"), ("escape", "close_menu", "close menu")]
     CSS = f"""
-    Screen {{ background: #0c0f14; }}
+    Screen {{ background: #0c0f14; layers: base overlay; }}
     #rack {{ height: 1fr; padding: 1 1 0 1; }}
+    #ctxbackdrop {{ layer: overlay; width: 100%; height: 100%; background: $background 0%; }}
+    #ctxmenu {{ width: auto; height: auto; border: round {AMBER}; background: #12171f; }}
+    .ctxitem {{ width: auto; height: 1; padding: 0 1; color: {AMBER}; }}
+    .ctxitem:hover {{ background: {AMBER}; color: #12171f; }}
     .module {{ width: 34; height: auto; border: round {TRACK}; border-title-color: {AMBER};
                padding: 0 1; margin: 0 2 1 0; background: #12171f; }}
     .module.stopped {{ border: round #333b47; border-title-color: {GREY}; background: #0e1219; }}
@@ -238,14 +287,20 @@ class Soundterm(App):
             pass
         self._set_status(f"{'▶ started' if on else '■ stopped'} {node}")
 
+    def add_module_ui(self, mtype):
+        """Add a module + spawn it + mount its panel. Shared by the +buttons and the
+        right-click menus. Returns the new module dict."""
+        mod = self.graph.add_module(mtype)
+        self.engine.spawn_module(mod)
+        self.query_one("#rack").mount(ModulePanel(mod["key"], self.graph, self._on_param))
+        return mod
+
     def on_button_pressed(self, event):
         if event.button.id == "sample":
             self._apply_ops([{"op": "sample", "seconds": 4.0}], "● sampling…")
             return
         t = event.button.id.split("-", 1)[1]
-        mod = self.graph.add_module(t)
-        self.engine.spawn_module(mod)
-        self.query_one("#rack").mount(ModulePanel(mod["key"], self.graph, self._on_param))
+        mod = self.add_module_ui(t)
         self._set_status(f"+ added {mod['key']}")
 
     def _finish_sample(self, buf):
@@ -339,6 +394,74 @@ class Soundterm(App):
             except Exception:
                 pass
         self._set_status(say or "done")
+
+    # ---- right-click context menus (tooling: they only emit graph ops) ------
+    def _cv_keys(self):
+        return [m["key"] for m in self.graph.modules if m["role"] == "cv"]
+
+    def _patch(self, src, node, param):
+        self._apply_ops([{"op": "connect", "src": src, "node": node, "param": param}],
+                        f"~ patched {src} → {node}.{param}")
+
+    def _unpatch(self, src, node, param):
+        self._apply_ops([{"op": "disconnect", "src": src, "node": node, "param": param}],
+                        f"pulled {src} ⇹ {node}.{param}")
+
+    def _add_and_patch(self, mtype, node, param):
+        mod = self.add_module_ui(mtype)
+        self._patch(mod["key"], node, param)
+
+    def _param_menu_items(self, node, param):
+        """Menu for a right-clicked param bar. A modulated param can only be unpatched
+        (an /n_map control takes a single source); otherwise offer every existing CV
+        source, plus add-a-source-and-patch shortcuts."""
+        mods = self.graph.modulators_of(node, param)
+        if mods:
+            return [(f"✕ unpatch from {s}", lambda s=s: self._unpatch(s, node, param))
+                    for s in mods]
+        items = [(f"◦ patch from {k}", lambda k=k: self._patch(k, node, param))
+                 for k in self._cv_keys()]
+        for t in ("lfo", "arp"):                       # add-and-patch in one gesture
+            items.append((f"＋ {t} → patch here",
+                          lambda t=t: self._add_and_patch(t, node, param)))
+        return items
+
+    def _module_menu_items(self, node):
+        items = []
+        on = self.graph.is_enabled(node)
+        if self.graph.bypass_param(node) is not None:
+            items.append((f"{'■ stop' if on else '▶ start'} {node}",
+                          lambda: self._apply_ops(
+                              [{"op": "toggle", "node": node, "value": not on}], "")))
+        if node not in ("drone", "reverb"):            # fixed endpoints stay
+            items.append((f"✕ remove {node}",
+                          lambda: self._apply_ops([{"op": "remove", "node": node}], "")))
+        return items
+
+    def open_param_menu(self, node, param, x, y):
+        self._show_menu(self._param_menu_items(node, param), x, y)
+
+    def open_module_menu(self, node, x, y):
+        self._show_menu(self._module_menu_items(node), x, y)
+
+    def _show_menu(self, items, x, y):
+        self._close_menu()
+        if not items:
+            return
+        # each pick closes the menu, then runs its op
+        wrapped = [(label, (lambda cb=cb: (self._close_menu(), cb())))
+                   for label, cb in items]
+        w, h = max(1, self.size.width), max(1, self.size.height)
+        x = max(0, min(int(x), w - 24))
+        y = max(0, min(int(y), h - len(items) - 2))
+        self.mount(ContextMenu(wrapped, x, y))
+
+    def _close_menu(self):
+        for m in self.query(ContextMenu):
+            m.remove()
+
+    def action_close_menu(self):
+        self._close_menu()
 
     def _mark_modulated(self, node, param, src):
         """Reflect a connect/disconnect on the target's param bar."""
